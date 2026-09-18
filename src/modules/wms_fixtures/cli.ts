@@ -146,7 +146,7 @@ const statusCommand: ModuleCli = {
         console.log(`  ${String(rows[0]?.count ?? 0).padStart(5)}  ${label}`)
       }
       const assignments = (await conn.execute(
-        'select count(*)::int as count from wms_sales_order_warehouse_assignments where organization_id = ? and tenant_id = ?',
+        'select count(*)::int as count from wms_sales_order_warehouse_assignments where organization_id = ? and tenant_id = ? and deleted_at is null',
         [scope.organizationId, scope.tenantId],
       )) as Array<{ count: number }>
       console.log(`  ${String(assignments[0]?.count ?? 0).padStart(5)}  sales-order warehouse assignments`)

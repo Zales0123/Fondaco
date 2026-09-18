@@ -153,6 +153,9 @@ export async function seedWmsFixtures(
 ): Promise<WmsFixtureSummary> {
   const summary = emptySummary()
 
+  // Not transactional: a mid-run failure leaves the warehouses already created, so this guard
+  // makes every later run skip. Recovering needs `yarn dev:reset` or `mercato init --reinstall`
+  // rather than simply re-running the seed.
   const existingCodes = await warehouseCodesInUse(em, scope)
   const alreadySeeded = WAREHOUSES.filter((warehouse) => existingCodes.has(warehouse.code))
   if (alreadySeeded.length > 0) {
@@ -182,6 +185,9 @@ export async function seedWmsFixtures(
   const lotKey = (sku: string, lotNumber: string) => `${sku}/${lotNumber}`
 
   for (const warehouse of WAREHOUSES) {
+    // WH-MAIN is primary, so upstream `enforcePrimaryWarehouse` demotes any existing primary
+    // whose code the skip guard above does not recognise. Irrelevant on a fresh `init`, and
+    // recoverable: the create's undo payload keeps `demotedPrimariesBefore`.
     const { result } = await commandBus.execute<unknown, { warehouseId: string }>('wms.warehouses.create', {
       input: { ...scoped, ...warehouse, isActive: true },
       ctx,
@@ -248,7 +254,10 @@ export async function seedWmsFixtures(
 
   for (const lot of LOTS) {
     const variant = variants.get(lot.sku)
-    if (!variant) continue
+    if (!variant) {
+      summary.warnings.push(`skipped lot ${lot.lotNumber}: no catalog variant with SKU ${lot.sku}`)
+      continue
+    }
     const { result } = await commandBus.execute<unknown, { lotId: string }>('wms.lots.create', {
       input: {
         ...scoped,
