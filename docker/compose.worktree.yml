@@ -1,0 +1,17 @@
+# Overlay for git worktrees, used with docker-compose.fullapp.dev.yml.
+#
+# Nothing is published to the host: every service is reached over its OrbStack
+# domain `<service>.<compose-project>.orb.local`, so parallel worktrees never
+# contend for 3000/4101/4096/3001/4566. Infra (postgres, redis, meilisearch)
+# already publishes nothing in the dev stack.
+services:
+  app:
+    ports: !reset []
+  documents-collab:
+    ports: !reset []
+  opencode:
+    ports: !reset []
+  mcp:
+    ports: !reset []
+  localstack:
+    ports: !reset []
