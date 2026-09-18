@@ -31,8 +31,6 @@ services:
     volumes:
       - init_marker:/tmp/init-marker
       - attachments_storage:/app/storage
-    ports:
-      - "${APP_PORT:-3000}:${CONTAINER_PORT:-3000}"
     environment:
       TENANT_DATA_ENCRYPTION: ${TENANT_DATA_ENCRYPTION:-true}
       TENANT_DATA_ENCRYPTION_DEBUG: ${TENANT_DATA_ENCRYPTION_DEBUG:-false}
@@ -128,8 +126,6 @@ services:
     command: ["yarn", "documents:collab"]
     working_dir: /app
     restart: unless-stopped
-    ports:
-      - "${DOCUMENTS_COLLAB_PORT:-4101}:${DOCUMENTS_COLLAB_PORT:-4101}"
     # Liveness only: any HTTP reply (including 503 when collaboration is not
     # configured) means the process is serving; a connection error means it is
     # down. Readiness would false-negative on the optional collab feature.
@@ -297,6 +293,7 @@ services:
       # NEXT_PUBLIC_* are pinned so a stray .env cannot hijack the base URL.
       APP_URL: http://app:${CONTAINER_PORT:-3000}
       NEXT_PUBLIC_APP_URL: http://app:${CONTAINER_PORT:-3000}
+      INTERNAL_APP_ORIGIN: http://app:${CONTAINER_PORT:-3000}
       NEXT_PUBLIC_API_BASE_URL: ""
       # Session-token (tier 2) decryption requires the app's encryption config.
       TENANT_DATA_ENCRYPTION: ${TENANT_DATA_ENCRYPTION:-true}
@@ -382,12 +379,10 @@ services:
     restart: unless-stopped
     profiles:
       - storage-s3
-    ports:
-      - "${LOCALSTACK_PORT:-4566}:4566"
     environment:
       SERVICES: s3
       AWS_DEFAULT_REGION: us-east-1
-      LOCALSTACK_HOST: localhost
+      LOCALSTACK_HOST: localstack
     volumes:
       - localstack_data:/var/lib/localstack
     healthcheck:

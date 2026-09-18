@@ -12,6 +12,7 @@ RUN apk add --no-cache python3 make g++ ca-certificates openssl
 RUN corepack enable
 
 COPY package.json yarn.lock .yarnrc.yml ./
+COPY .yarn/patches ./.yarn/patches
 RUN if grep -Eq 'http://(localhost|127\\.0\\.0\\.1):' .yarnrc.yml; then \
       sed \
         -e "s#http://localhost:#http://${OPEN_MERCATO_DOCKER_REGISTRY_HOST}:#g" \
@@ -41,6 +42,7 @@ RUN apk add --no-cache python3 make g++ ca-certificates openssl
 RUN corepack enable
 
 COPY package.json yarn.lock .yarnrc.yml ./
+COPY .yarn/patches ./.yarn/patches
 RUN if grep -Eq 'http://(localhost|127\\.0\\.0\\.1):' .yarnrc.yml; then \
       sed \
         -e "s#http://localhost:#http://${OPEN_MERCATO_DOCKER_REGISTRY_HOST}:#g" \
@@ -90,6 +92,7 @@ RUN if [ "$INSTALL_CHROMIUM" = "1" ]; then \
 RUN corepack enable
 
 COPY package.json yarn.lock .yarnrc.yml ./
+COPY .yarn/patches ./.yarn/patches
 RUN if grep -Eq 'http://(localhost|127\\.0\\.0\\.1):' .yarnrc.yml; then \
       sed \
         -e "s#http://localhost:#http://${OPEN_MERCATO_DOCKER_REGISTRY_HOST}:#g" \

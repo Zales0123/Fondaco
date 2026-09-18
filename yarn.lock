@@ -4151,6 +4151,33 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@open-mercato/cli@patch:@open-mercato/cli@npm%3A0.8.0#~/.yarn/patches/@open-mercato-cli-npm-0.8.0-352e8c707b.patch":
+  version: 0.8.0
+  resolution: "@open-mercato/cli@patch:@open-mercato/cli@npm%3A0.8.0#~/.yarn/patches/@open-mercato-cli-npm-0.8.0-352e8c707b.patch::version=0.8.0&hash=7f9ff5"
+  dependencies:
+    "@mikro-orm/core": "npm:^7.1.14"
+    "@mikro-orm/decorators": "npm:^7.1.14"
+    "@mikro-orm/migrations": "npm:^7.1.14"
+    "@mikro-orm/postgresql": "npm:^7.1.14"
+    "@open-mercato/queue": "npm:0.8.0"
+    "@open-mercato/shared": "npm:0.8.0"
+    "@open-mercato/telemetry": "npm:0.8.0"
+    cross-spawn: "npm:^7.0.6"
+    pg: "npm:8.23.0"
+    semver: "npm:^7.8.5"
+    testcontainers: "npm:^12.0.4"
+    ts-morph: "npm:^28.0.0"
+    tsx: "npm:^4.23.12"
+    typescript: "npm:7.0.2"
+    typescript-js: "npm:typescript@6.0.3"
+  peerDependencies:
+    "@open-mercato/shared": 0.8.0
+  bin:
+    mercato: bin/mercato
+  checksum: 10c0/0c2152e99c3fc00a15657768d968ba1bf37c6aa18b7dce71cda5ea0b149b143b83d2befbb06129d136bcbaf43b63cbce6dc4dad683696109d9e70ccc277b5ac8
+  languageName: node
+  linkType: hard
+
 "@open-mercato/content@npm:0.8.0":
   version: 0.8.0
   resolution: "@open-mercato/content@npm:0.8.0"
@@ -12690,7 +12717,7 @@ __metadata:
     "@open-mercato/channel-resend": "npm:0.8.0"
     "@open-mercato/channel-ses": "npm:0.8.0"
     "@open-mercato/checkout": "npm:0.8.0"
-    "@open-mercato/cli": "npm:0.8.0"
+    "@open-mercato/cli": "patch:@open-mercato/cli@npm%3A0.8.0#~/.yarn/patches/@open-mercato-cli-npm-0.8.0-352e8c707b.patch"
     "@open-mercato/content": "npm:0.8.0"
     "@open-mercato/core": "npm:0.8.0"
     "@open-mercato/documents": "npm:0.8.0"
