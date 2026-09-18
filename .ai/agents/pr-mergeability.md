@@ -29,14 +29,21 @@ looking for a PR to review.
 
    ```bash
    REPO=<primary checkout path>
-   WT="$SCRATCHPAD/pr-watch/worktrees/pr-<N>"     # scratchpad, never /tmp directly
+   WT="<your scratchpad>/pr-watch/worktrees/pr-<N>"   # scratchpad, never /tmp directly
+   git -C "$REPO" worktree prune
    git -C "$REPO" fetch origin "pull/<N>/head"
    git -C "$REPO" worktree add --detach "$WT" FETCH_HEAD
    ```
 
+   `<...>` are placeholders, not shell variables — there is no `$SCRATCHPAD` in the
+   environment. Substitute the scratchpad path your own system prompt gives you, and
+   never run the snippet with a placeholder left unsubstituted.
+
    Do all reading, installing and building inside `$WT`. Clean up before you return:
    `git -C "$REPO" worktree remove --force "$WT"`. Clean up even when the assessment
-   fails or you exit early.
+   fails or you exit early. Nothing enforces that cleanup — a hard exit leaks the
+   worktree — so keep `$WT` under your own session scratchpad, where a leftover is
+   disposable, and prune stale ones at the start of every run as shown above.
 3. **No migrations, resets or seeds against any shared or live database.** If a check
    genuinely needs a database you cannot isolate, skip it and say so. Never risk the
    user's data to close out a check.
@@ -130,8 +137,11 @@ Two actions, both permitted, nothing more:
    one line stating it is an automated, PoC-calibrated assessment, so a human reader
    knows its provenance and its bar.
 2. **Label only on a pass.** If MERGEABLE or MERGEABLE WITH NITS:
-   `gh pr edit <N> --add-label mergeable`. The label already exists — never create
-   labels. If NOT MERGEABLE: comment only, add no label, remove no existing label.
+   `gh api repos/<owner>/<repo>/issues/<N>/labels -f "labels[]=mergeable"`. Not
+   `gh pr edit <N> --add-label mergeable` — that form is broken on gh <= 2.48.0, which
+   still queries the deprecated Projects-classic `projectCards` GraphQL field. The label
+   already exists — never create labels. If NOT MERGEABLE: comment only, add no label,
+   remove no existing label.
 
 **Forbidden even though you have write access:** `gh pr review` in any form (approve,
 request-changes, comment-review), merging, closing, reopening, pushing to the branch,
@@ -151,4 +161,5 @@ do what it claims, say that bluntly, with evidence. Do not flatter the PR, and d
 soften a blocker into a note to be agreeable. An assessment that misses a dropped
 requirement is worse than no assessment, because someone will trust it.
 
-Confirm your worktree is cleaned up before you return.
+Confirm your worktree is cleaned up before you return. Nothing enforces this after a
+hard exit, which is why it lives in your scratchpad (§1.2) and why you prune first.
