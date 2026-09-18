@@ -26,5 +26,6 @@ until that changes.
 | Agent | Purpose |
 |---|---|
 | `code-quality` | Behaviour-preserving refactoring of changed files to clean-code and TypeScript standards, before commit/PR. Not a bug hunter (`om-troubleshooter`) and not a merge verdict (`om-code-review`). |
+| `pr-mergeability` | Assesses whether an open PR delivers the acceptance criteria it claims, PoC-calibrated, and records the verdict as a PR comment plus the `mergeable` label. Dispatched by the PR-watcher loop. |
 
 A new agent is picked up only after the Claude Code session restarts.
