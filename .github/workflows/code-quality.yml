@@ -1,0 +1,116 @@
+# Deterministic code-quality gate: every check here either passes or fails on its
+# own, with no network calls to third-party services, no database, and no
+# environment secrets. Anything that needs a live Postgres (migrations,
+# `yarn test:integration:ephemeral`) or a production build belongs in a separate
+# workflow, not this one.
+name: Code Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch supersedes an in-flight run. `main` is exempt
+# so the branch always keeps a completed result.
+concurrency:
+  group: code-quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Lint, types and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      # package.json pins `engines.node: >=24` and a `preinstall` guard enforces
+      # it, so the runner has to match or the install aborts.
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      # Yarn 4 is pinned via `packageManager` in package.json; Corepack resolves
+      # exactly that version instead of whatever ships on the runner.
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Resolve the Yarn cache directory
+        id: yarn-cache
+        run: echo "dir=$(yarn config get cacheFolder)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the Yarn cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ steps.yarn-cache.outputs.dir }}
+          key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
+          restore-keys: ${{ runner.os }}-yarn-
+
+      # --immutable fails the build if yarn.lock does not already satisfy
+      # package.json, so a dependency change without a committed lockfile update
+      # cannot merge.
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      # Read-only: reports a non-zero exit when a dependency range could collapse
+      # onto an already-installed version.
+      - name: Check the lockfile for duplicates
+        if: ${{ !cancelled() }}
+        run: yarn dedupe --check
+
+      # Registries, entity ids, DI and the OpenAPI document live in .mercato/,
+      # which is gitignored — typecheck and lint cannot resolve `#generated/*`
+      # until this runs. It is pure source analysis: no database is contacted,
+      # and the post-generate cache invalidation degrades to a warning without
+      # one.
+      - name: Generate module artifacts
+        if: ${{ !cancelled() }}
+        run: yarn generate
+
+      - name: Typecheck
+        if: ${{ !cancelled() }}
+        run: yarn typecheck
+
+      - name: Lint
+        if: ${{ !cancelled() }}
+        run: yarn lint
+
+      # Design-system policy: rejects hardcoded Tailwind palette shades,
+      # arbitrary values and raw `dark:` variants in favour of tokens.
+      - name: Check design-system compliance
+        if: ${{ !cancelled() }}
+        run: yarn ds:check
+
+      # Report-only by design: the script prints every hardcoded user-facing
+      # string it finds but always exits 0, so this step surfaces the list
+      # without gating the merge. Promote it to a hard gate once the existing
+      # findings are cleared.
+      - name: Report hardcoded user-facing strings
+        if: ${{ !cancelled() }}
+        run: yarn i18n:check-hardcoded
+
+      - name: Run unit tests
+        if: ${{ !cancelled() }}
+        run: yarn test
+
+  actionlint:
+    name: Workflow lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      # Validates the workflow files themselves: expression syntax, unknown
+      # keys, bad `runs-on` labels, and shellcheck over every `run:` block.
+      - name: Run actionlint
+        uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -color
