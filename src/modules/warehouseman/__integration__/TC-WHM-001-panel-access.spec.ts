@@ -10,6 +10,7 @@ import { expect, test, type APIRequestContext } from '@playwright/test'
 const ADMIN = { email: 'admin@acme.com', password: 'secret' }
 const EMPLOYEE = { email: 'employee@acme.com', password: 'secret' }
 const WAREHOUSEMAN_PASSWORD = 'Warehouse123!'
+const WAREHOUSEMAN_NAME = 'Integration Warehouseman'
 
 // The Panel defaults to Polish; the seeded environment may serve English. Match either
 // rather than pinning the assertion to whichever locale the run happens to resolve.
@@ -42,7 +43,7 @@ async function createWarehouseman(request: APIRequestContext, email: string): Pr
   const response = await request.post('/api/auth/users', {
     data: {
       email,
-      name: 'Integration Warehouseman',
+      name: WAREHOUSEMAN_NAME,
       password: WAREHOUSEMAN_PASSWORD,
       organizationId,
       roles: ['warehouseman'],
@@ -86,6 +87,31 @@ test.describe('TC-WHM-001 warehouseman panel access', () => {
     // session refresh instead, which reads as the page silently throwing them out.
     await expect(page).toHaveURL(/\/warehouseman\/login$/)
     await expect(page.getByRole('alert')).toBeVisible()
+  })
+
+  test('the panel header names the assigned warehouse and the signed-in user', async ({ page }) => {
+    await page.goto('/warehouseman/login')
+    await page.getByLabel(/E-mail|Email/).fill(warehousemanEmail)
+    await page.getByLabel(/Hasło|Password/).fill(WAREHOUSEMAN_PASSWORD)
+    await page.getByRole('button', { name: /Zaloguj się|Sign in/ }).click()
+
+    // The fixture user is created without an assignment, so the empty state is what a
+    // freshly onboarded warehouseman actually sees — and they are still let in.
+    await expect(page.getByRole('heading', { name: /Brak przypisanego magazynu|No warehouse assigned/ })).toBeVisible()
+    // The fixture user has a display name, which the header prefers over the email.
+    await expect(page.getByText(WAREHOUSEMAN_NAME)).toBeVisible()
+    await expect(page.getByRole('button', { name: /Wyloguj się|Sign out/ })).toBeVisible()
+  })
+
+  test('signing out returns to the panel login', async ({ page }) => {
+    await page.goto('/warehouseman/login')
+    await page.getByLabel(/E-mail|Email/).fill(warehousemanEmail)
+    await page.getByLabel(/Hasło|Password/).fill(WAREHOUSEMAN_PASSWORD)
+    await page.getByRole('button', { name: /Zaloguj się|Sign in/ }).click()
+    await expect(page).toHaveURL(/\/warehouseman$/)
+
+    await page.getByRole('button', { name: /Wyloguj się|Sign out/ }).click()
+    await expect(page).toHaveURL(/\/warehouseman\/login$/)
   })
 
   test('a stub action opens from the home screen and leads back', async ({ page }) => {
