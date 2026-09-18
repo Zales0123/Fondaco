@@ -88,6 +88,21 @@ test.describe('TC-WHM-001 warehouseman panel access', () => {
     await expect(page.getByRole('alert')).toBeVisible()
   })
 
+  test('a stub action opens from the home screen and leads back', async ({ page }) => {
+    await page.goto('/warehouseman/login')
+    await page.getByLabel(/E-mail|Email/).fill(warehousemanEmail)
+    await page.getByLabel(/Hasło|Password/).fill(WAREHOUSEMAN_PASSWORD)
+    await page.getByRole('button', { name: /Zaloguj się|Sign in/ }).click()
+    await expect(page.getByRole('heading', { name: PANEL_TITLE })).toBeVisible()
+
+    await page.getByRole('link', { name: /Przyjęcie towaru|Goods receipt/ }).click()
+    await expect(page).toHaveURL(/\/warehouseman\/receiving$/)
+    await expect(page.getByText(/nie jest jeszcze dostępna|not available yet/)).toBeVisible()
+
+    await page.getByRole('link', { name: /Wróć|Back/ }).click()
+    await expect(page).toHaveURL(/\/warehouseman$/)
+  })
+
   test('a user without panel access is refused after signing in on the panel login', async ({ page }) => {
     await page.goto('/warehouseman/login')
     await page.getByLabel(/E-mail|Email/).fill(EMPLOYEE.email)
