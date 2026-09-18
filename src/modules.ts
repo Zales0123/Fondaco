@@ -25,6 +25,7 @@ export const enabledModules: ModuleEntry[] = [
   { id: 'sales', from: '@open-mercato/core' },
   { id: 'wms', from: '@open-mercato/core' },
   { id: 'currencies', from: '@open-mercato/core' },
+  { id: 'label_printing', from: '@app' },
   // Demo warehouse/inventory data for the installed wms module (see
   // src/modules/wms_fixtures). Seeds on `mercato init` unless --no-examples.
   // Keep last: setup hooks run in this list's order, and the fixtures depend on

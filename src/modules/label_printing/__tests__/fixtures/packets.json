@@ -1,0 +1,52 @@
+{
+  "setDensity": {
+    "cmd": 33,
+    "payload": "03",
+    "packet": "555521010323aaaa"
+  },
+  "setLabelType": {
+    "cmd": 35,
+    "payload": "01",
+    "packet": "555523010123aaaa"
+  },
+  "printStart": {
+    "cmd": 1,
+    "payload": "00010000000000",
+    "packet": "555501070001000000000007aaaa"
+  },
+  "pageStart": {
+    "cmd": 3,
+    "payload": "01",
+    "packet": "555503010103aaaa"
+  },
+  "setPageSize": {
+    "cmd": 19,
+    "payload": "006401380001",
+    "packet": "5555130600640138000149aaaa"
+  },
+  "blankRows": {
+    "cmd": 132,
+    "payload": "000703",
+    "packet": "5555840300070383aaaa"
+  },
+  "printRow": {
+    "cmd": 133,
+    "payload": "002a00800001000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f3031",
+    "packet": "55558538002a00800001000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303117aaaa"
+  },
+  "pageEnd": {
+    "cmd": 227,
+    "payload": "01",
+    "packet": "5555e30101e3aaaa"
+  },
+  "printStatus": {
+    "cmd": 163,
+    "payload": "",
+    "packet": "5555a300a3aaaa"
+  },
+  "printEnd": {
+    "cmd": 243,
+    "payload": "01",
+    "packet": "5555f30101f3aaaa"
+  }
+}

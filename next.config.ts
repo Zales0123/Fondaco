@@ -61,6 +61,12 @@ const nextConfig: NextConfig & { agentRules?: boolean } = {
     '@open-mercato/ai-assistant',
   ],
   serverExternalPackages: [
+    // Native binding for the NiimBot label printer's serial port; bundling it
+    // breaks the .node addon resolution.
+    'serialport',
+    '@serialport/bindings-cpp',
+    // Skia binding used to rasterize label images; same reason.
+    '@napi-rs/canvas',
     'esbuild',
     '@esbuild/darwin-arm64',
     '@open-mercato/cli',

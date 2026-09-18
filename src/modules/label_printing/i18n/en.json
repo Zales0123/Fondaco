@@ -1,0 +1,9 @@
+{
+  "label_printing.action.print": "Print label",
+  "label_printing.print.success": "Label sent to the printer.",
+  "label_printing.print.error.busy": "The label printer is already printing. Try again in a moment.",
+  "label_printing.print.error.unavailable": "The label printer is not reachable. Check that it is switched on and paired.",
+  "label_printing.print.error.image": "The label image could not be prepared for printing.",
+  "label_printing.print.error.printer": "The printer reported a problem and did not finish the label.",
+  "label_printing.print.error.unexpected": "The label could not be printed."
+}
