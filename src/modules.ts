@@ -26,6 +26,9 @@ export const enabledModules: ModuleEntry[] = [
   { id: 'wms', from: '@open-mercato/core' },
   { id: 'currencies', from: '@open-mercato/core' },
   { id: 'label_printing', from: '@app' },
+  // Backfills demo GTINs onto the variants catalog's own seedExamples creates
+  // (it sets none). Must come after `catalog` so the variants exist.
+  { id: 'catalog_fixtures', from: '@app' },
   // Demo warehouse/inventory data for the installed wms module (see
   // src/modules/wms_fixtures). Seeds on `mercato init` unless --no-examples.
   // Keep last: setup hooks run in this list's order, and the fixtures depend on
