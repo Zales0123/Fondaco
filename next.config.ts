@@ -3,7 +3,12 @@ import { resolveAllowedDevOrigins } from './src/lib/dev-origins'
 import { telemetryServerExternalPackages } from '@open-mercato/telemetry/nextjs-config'
 
 const isDevelopment = process.env.NODE_ENV !== 'production'
-const allowedDevOrigins = isDevelopment ? resolveAllowedDevOrigins() : []
+// Resolved unconditionally: `yarn dev` runs the Next dev server with
+// NODE_ENV=production (Open Mercato CLI buildServerProcessEnvironment), so
+// gating this on NODE_ENV drops the allowlist and Next blocks /_next/* plus the
+// HMR WebSocket for every non-localhost host. Next ignores allowedDevOrigins
+// outside the dev server, so resolving it in production is inert.
+const allowedDevOrigins = resolveAllowedDevOrigins()
 
 const contentSecurityPolicy = [
   "default-src 'self'",

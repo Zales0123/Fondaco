@@ -67,7 +67,7 @@
     "@open-mercato/channel-resend": "0.8.0",
     "@open-mercato/channel-ses": "0.8.0",
     "@open-mercato/checkout": "0.8.0",
-    "@open-mercato/cli": "0.8.0",
+    "@open-mercato/cli": "patch:@open-mercato/cli@npm%3A0.8.0#~/.yarn/patches/@open-mercato-cli-npm-0.8.0-352e8c707b.patch",
     "@open-mercato/content": "0.8.0",
     "@open-mercato/core": "0.8.0",
     "@open-mercato/documents": "0.8.0",

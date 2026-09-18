@@ -21,8 +21,14 @@ services:
       - app_next:/app/.next
       - init_marker:/tmp/init-marker
       - attachments_storage:/app/storage
-    ports:
-      - "${APP_PORT:-3000}:3000"
+    # Layered env: .env holds shared defaults, .env.local holds per-developer /
+    # per-worktree overrides (domains). Both optional; later file wins. Values
+    # under `environment:` below are container-network pins and always win.
+    env_file:
+      - path: .env
+        required: false
+      - path: .env.local
+        required: false
     environment:
       CHOKIDAR_USEPOLLING: ${CHOKIDAR_USEPOLLING:-true}
       WATCHPACK_POLLING: ${WATCHPACK_POLLING:-true}
@@ -33,14 +39,16 @@ services:
       TENANT_DATA_ENCRYPTION_FALLBACK_KEY: ${TENANT_DATA_ENCRYPTION_FALLBACK_KEY:-dev-tenant-encryption-fallback-key-32chars}
       NODE_ENV: development
       NODE_OPTIONS: ${NODE_OPTIONS:---max-old-space-size=3072}
+      OM_DEV_WITH_MCP: 0
+      # Docker cannot set host-wide inotify sysctls; remove this and raise the Docker host limit if Turbopack exhausts 1M watches.
+      OM_DEV_INOTIFY_CHECK: 0
       DEPLOY_ENV: ${DEPLOY_ENV:-local}
       PORT: 3000
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-open-mercato}
       JWT_SECRET: ${JWT_SECRET:-JWT}
-      APP_URL: ${APP_URL:-http://localhost:3000}
-      # Additional trusted app/dev origins for the Open Mercato origin allowlist (resolveAllowedDevOrigins)
-      APP_ALLOWED_ORIGINS: ${APP_ALLOWED_ORIGINS:-}
-      NEXT_PUBLIC_DOCUMENTS_COLLAB_URL: ${NEXT_PUBLIC_DOCUMENTS_COLLAB_URL:-}
+      # APP_URL, APP_ALLOWED_ORIGINS and NEXT_PUBLIC_DOCUMENTS_COLLAB_URL are
+      # browser-facing, so they come from .env/.env.local (see env_file above).
+      # Set them in .env.local when serving the app over an OrbStack domain.
       DOCUMENTS_COLLAB_JWT_SECRET_V2: ${DOCUMENTS_COLLAB_JWT_SECRET_V2:-dev-only-documents-collab-v2-secret}
       CACHE_REDIS_URL: redis://redis:6379
       CACHE_STRATEGY: ${CACHE_STRATEGY:-redis}
@@ -96,21 +104,24 @@ services:
     volumes:
       - .:/app
       - app_node_modules:/app/node_modules
-    ports:
-      - "${DOCUMENTS_COLLAB_PORT:-4101}:${DOCUMENTS_COLLAB_PORT:-4101}"
+    # Same layering as `app`: the collab origin allowlist is seeded from
+    # APP_URL / NEXT_PUBLIC_APP_URL / DOCUMENTS_COLLAB_ALLOWED_ORIGINS, which are
+    # browser origins and therefore live in .env / .env.local.
+    env_file:
+      - path: .env
+        required: false
+      - path: .env.local
+        required: false
     environment:
       NODE_ENV: development
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-open-mercato}
       JWT_SECRET: ${JWT_SECRET:-JWT}
-      APP_URL: ${APP_URL:-http://localhost:3000}
-      NEXT_PUBLIC_APP_URL: ${APP_URL:-http://localhost:3000}
       DOCUMENTS_COLLAB_PORT: ${DOCUMENTS_COLLAB_PORT:-4101}
       DOCUMENTS_COLLAB_REDIS_URL: redis://redis:6379
       DOCUMENTS_COLLAB_REDIS_PREFIX: ${DOCUMENTS_COLLAB_REDIS_PREFIX:-open-mercato:documents:collab:${DEPLOY_ENV:-local}}
       # Same Redis as the app so multi-instance collaboration sync works out of the box
       # (DOCUMENTS_COLLAB_REDIS_URL wins when both are set).
       REDIS_URL: redis://redis:6379
-      DOCUMENTS_COLLAB_ALLOWED_ORIGINS: ${DOCUMENTS_COLLAB_ALLOWED_ORIGINS:-http://localhost:3000}
       DOCUMENTS_COLLAB_JWT_SECRET_V2: ${DOCUMENTS_COLLAB_JWT_SECRET_V2:-dev-only-documents-collab-v2-secret}
       DOCUMENTS_COLLAB_JWT_SECRET: ${DOCUMENTS_COLLAB_JWT_SECRET:-}
       DOCUMENTS_COLLAB_APP_ROOT: /app
@@ -153,11 +164,9 @@ services:
     # Invoked through `sh` so the mount does not depend on a preserved exec bit.
     entrypoint: ["/bin/sh", "/home/opencode/entrypoint.sh"]
     restart: unless-stopped
-    # Published for local development (MCP Inspector, curl /global/health).
-    # OpenCode has no authentication of its own, so do not expose this port on
-    # a shared or public host without setting OPENCODE_PASSWORD.
-    ports:
-      - "${OPENCODE_PORT:-4096}:4096"
+    # Reachable only on the compose network (no published port). OpenCode has
+    # no authentication of its own, so do not publish this port without
+    # setting OPENCODE_PASSWORD.
     environment:
       OM_AI_PROVIDER: ${OM_AI_PROVIDER:-openai}
       OM_AI_MODEL: ${OM_AI_MODEL:-gpt-5-mini}
@@ -228,13 +237,17 @@ services:
         fi
         sh /app/docker/scripts/mcp-entrypoint.sh
     working_dir: /app
-    ports:
-      - "${MCP_PORT:-3001}:3001"
     volumes:
       # KEEP IN SYNC with the `app` service: the sidecar runs the same source.
       - .:/app
       - app_node_modules:/app/node_modules
       - mcp_shared:/run/mcp-shared
+    # Same layering as `app`; the service-DNS pins below still win.
+    env_file:
+      - path: .env
+        required: false
+      - path: .env.local
+        required: false
     environment:
       NODE_ENV: ${NODE_ENV:-development}
       NODE_OPTIONS: ${MCP_NODE_OPTIONS:---max-old-space-size=2048}
@@ -254,6 +267,7 @@ services:
       # NEXT_PUBLIC_* are pinned so a stray .env cannot hijack the base URL.
       APP_URL: http://app:${CONTAINER_PORT:-3000}
       NEXT_PUBLIC_APP_URL: http://app:${CONTAINER_PORT:-3000}
+      INTERNAL_APP_ORIGIN: http://app:${CONTAINER_PORT:-3000}
       NEXT_PUBLIC_API_BASE_URL: ""
       # Session-token (tier 2) decryption requires the app's encryption config.
       TENANT_DATA_ENCRYPTION: ${TENANT_DATA_ENCRYPTION:-true}
@@ -339,12 +353,10 @@ services:
     restart: unless-stopped
     profiles:
       - storage-s3
-    ports:
-      - "${LOCALSTACK_PORT:-4566}:4566"
     environment:
       SERVICES: s3
       AWS_DEFAULT_REGION: us-east-1
-      LOCALSTACK_HOST: localhost
+      LOCALSTACK_HOST: localstack
     volumes:
       - localstack_data:/var/lib/localstack
     healthcheck:

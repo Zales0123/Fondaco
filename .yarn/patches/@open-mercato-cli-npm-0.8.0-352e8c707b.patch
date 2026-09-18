@@ -1,0 +1,24 @@
+diff --git a/dist/lib/generators/openapi.js b/dist/lib/generators/openapi.js
+index ac66b17c0ad0c88004f36563627e17b0f70755d6..751ed94b790a17486c05a5e8cde85d5babb8166b 100644
+--- a/dist/lib/generators/openapi.js
++++ b/dist/lib/generators/openapi.js
+@@ -381,6 +381,7 @@ process.stdout.write(JSON.stringify(deepClone(doc), (_, v) =>
+     setup(build) {
+       build.onResolve({ filter: /^[^./]/ }, (args) => {
+         if (path.isAbsolute(args.path)) return void 0;
++        if (args.path.endsWith(".json")) return void 0;
+         if (args.path.startsWith("@open-mercato/")) return void 0;
+         if (args.path.startsWith("@/")) return void 0;
+         if (args.path.startsWith("#generated/")) return void 0;
+diff --git a/src/lib/generators/openapi.ts b/src/lib/generators/openapi.ts
+index bfe26bfb1b69a67cda4a7fa9aee943b1a2ce70bd..14b4cab186befd322ecb2dec6a3be69a11ea4d3d 100644
+--- a/src/lib/generators/openapi.ts
++++ b/src/lib/generators/openapi.ts
+@@ -500,6 +500,7 @@ process.stdout.write(JSON.stringify(deepClone(doc), (_, v) =>
+     setup(build: any) {
+       build.onResolve({ filter: /^[^./]/ }, (args: any) => {
+         if (path.isAbsolute(args.path)) return undefined
++        if (args.path.endsWith('.json')) return undefined
+         if (args.path.startsWith('@open-mercato/')) return undefined
+         if (args.path.startsWith('@/')) return undefined
+         if (args.path.startsWith('#generated/')) return undefined
