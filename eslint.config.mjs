@@ -8,6 +8,10 @@ const ignores = [
   '.next/**',
   '.mercato/**',
   '.ai/framework-context/**',
+  // Playwright writes its HTML report and traces here; they are bundled vendor
+  // assets, not source, and linting them buries real findings under hundreds of
+  // errors from minified code.
+  '.ai/qa/test-results/**',
   'dist/**',
   'out/**',
   'build/**',

@@ -38,5 +38,7 @@ module.exports = {
     ],
   },
   transformIgnorePatterns: ['/node_modules/(?!(@open-mercato|@mikro-orm|@tanstack/react-table|@tanstack/table-core|@tanstack/react-store|@tanstack/store)/)'],
-  testPathIgnorePatterns: ['/node_modules/', '/.next/', '/.mercato/', '/.ai/qa/'],
+  // `__integration__` holds Playwright specs. Jest would otherwise pick them up by
+  // filename and fail on `@playwright/test`, which cannot run inside a Jest worker.
+  testPathIgnorePatterns: ['/node_modules/', '/.next/', '/.mercato/', '/.ai/qa/', '/__integration__/'],
 }
