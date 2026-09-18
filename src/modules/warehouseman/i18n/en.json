@@ -13,6 +13,7 @@
   "warehouseman.panel.loading": "Loading…",
   "warehouseman.panel.noWarehouse": "No warehouse assigned",
   "warehouseman.panel.signOut": "Sign out",
+  "warehouseman.panel.signOutFailed": "Could not sign out. Check the connection and try again.",
   "warehouseman.panel.title": "Warehouseman panel",
   "warehouseman.stub.back": "Back",
   "warehouseman.stub.notImplemented": "This operation is not available yet."

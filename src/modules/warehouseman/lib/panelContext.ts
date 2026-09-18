@@ -22,15 +22,23 @@ export async function loadPanelContext(): Promise<PanelContext> {
   const auth = await getAuthFromCookies()
   if (!auth) return { userLabel: '', warehouse: null }
 
-  const container = await createRequestContainer()
-  const queryEngine = container.resolve('queryEngine') as QueryEngine
-  const em = container.resolve('em') as EntityManager
+  const sessionEmail = typeof auth.email === 'string' ? auth.email : ''
+  try {
+    const container = await createRequestContainer()
+    const queryEngine = container.resolve('queryEngine') as QueryEngine
+    const em = container.resolve('em') as EntityManager
 
-  const warehouse = await resolveAssignedWarehouse(
-    { queryEngine, readAssignedWarehouseId: makeAssignedWarehouseIdReader(em) },
-    auth,
-  )
-  return { userLabel: await resolveUserLabel(queryEngine, auth), warehouse }
+    const warehouse = await resolveAssignedWarehouse(
+      { queryEngine, readAssignedWarehouseId: makeAssignedWarehouseIdReader(em) },
+      auth,
+    )
+    return { userLabel: await resolveUserLabel(queryEngine, auth), warehouse }
+  } catch {
+    // Everything this function adds is a convenience on top of a session the route
+    // gate already accepted. A transient failure reading it must not 500 the panel
+    // home and every stub route; fall back to what the session itself carries.
+    return { userLabel: sessionEmail, warehouse: null }
+  }
 }
 
 async function resolveUserLabel(

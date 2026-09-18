@@ -26,17 +26,28 @@ export function PanelShell({ userLabel, warehouseName, children }: PanelShellPro
   const t = useT()
   const router = useRouter()
   const [signingOut, setSigningOut] = React.useState(false)
+  const [signOutFailed, setSignOutFailed] = React.useState(false)
 
   async function onSignOut() {
     if (signingOut) return
     setSigningOut(true)
+    setSignOutFailed(false)
     try {
-      await apiCall('/api/auth/logout', {
+      const { ok } = await apiCall('/api/auth/logout', {
         method: 'POST',
         headers: { 'x-om-unauthorized-redirect': '0' },
       })
-    } finally {
+      if (!ok) {
+        // Showing the login page while the session is still valid is worse than
+        // staying put: on a shared tablet the next person inherits the session.
+        setSignOutFailed(true)
+        return
+      }
       router.replace(PANEL_LOGIN_PATH)
+    } catch {
+      setSignOutFailed(true)
+    } finally {
+      setSigningOut(false)
     }
   }
 
@@ -59,6 +70,11 @@ export function PanelShell({ userLabel, warehouseName, children }: PanelShellPro
         >
           {t('warehouseman.panel.signOut')}
         </Button>
+        {signOutFailed ? (
+          <p role="alert" className="text-lg text-destructive">
+            {t('warehouseman.panel.signOutFailed')}
+          </p>
+        ) : null}
       </header>
       <main className="flex flex-col gap-4 px-4 py-6 text-lg">{children}</main>
     </div>
