@@ -16,8 +16,12 @@ export const setup: ModuleSetupConfig = {
     // the installed role-assignment guard refuses to grant a feature the granter does
     // not hold, so without this nobody but a superadmin could create a warehouseman.
     // Holding it also admits them to the panel, which ADR-0003 states as the rule.
-    superadmin: ['warehouseman.panel.access'],
-    admin: ['warehouseman.panel.access'],
+    // `entities.definitions.view` gates the relation-options endpoint that fills the
+    // warehouse picker on the user form. Without it the picker renders empty and
+    // reports nothing, so whoever assigns warehouses must hold it explicitly rather
+    // than by accident of another module's wildcard.
+    superadmin: ['warehouseman.panel.access', 'entities.definitions.view'],
+    admin: ['warehouseman.panel.access', 'entities.definitions.view'],
     [WAREHOUSEMAN_ROLE]: ['warehouseman.panel.access'],
   },
 
