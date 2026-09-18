@@ -32,4 +32,4 @@ url = "http://app.fondaco-{{ branch | sanitize | lower }}.orb.local"
 exclude = [".next/", ".turbo/", ".cache/", "storage/", "data/", ".events/", ".queue", ".ai/qa/", ".ai/framework-context/"]
 
 [aliases]
-stack = "COMPOSE_PROJECT_NAME=fondaco-{{ branch | sanitize | lower }} docker compose -f docker-compose.fullapp.dev.yml -f docker/compose.worktree.yml"
+stack = "COMPOSE_PROJECT_NAME=fondaco-{{ branch | sanitize | lower }} docker compose -f docker-compose.fullapp.dev.yml -f docker/compose.worktree.yml {{ args }}"
