@@ -7,7 +7,7 @@ Harness directories are ignored (see `.gitignore`), so each clone links the defi
 into the harness it uses:
 
 ```bash
-ln -sfn ../../.ai/agents/<name>.md .claude/agents/<name>.md
+mkdir -p .claude/agents && ln -sfn ../../.ai/agents/<name>.md .claude/agents/<name>.md
 ```
 
 `yarn install-skills` does **not** do this — it only manages skills

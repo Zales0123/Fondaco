@@ -169,6 +169,12 @@ yarn ds:check
 yarn test
 ```
 
+**Divergence from the repo's declared validation set.** `.ai/agentic.config.json` declares
+`yarn generate`, `yarn typecheck`, `yarn lint`, `yarn ds:check`, `yarn test`, `yarn build`.
+This gate drops `yarn generate` and `yarn build` from the default run, because a
+behaviour-preserving refactor changes neither discovery input nor build output. Each one is
+mandatory again the moment it does — see the two conditions below.
+
 Rules:
 
 - Run them. Do not predict their result. "Should pass" is not a result.
@@ -227,4 +233,5 @@ Hand back to the user or the named skill instead of acting:
 | A file needs splitting across module boundaries | propose it, do not do it |
 
 Never commit, push, or open a PR. You leave a clean working tree for the caller to
-review.
+review. Your `Bash` access is unrestricted, so this is a rule you honour, not a
+sandbox that enforces it.
