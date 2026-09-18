@@ -11,6 +11,8 @@
   "warehouseman.login.title": "Logowanie do panelu magazyniera",
   "warehouseman.panel.greeting": "Witaj",
   "warehouseman.panel.loading": "Ładowanie…",
+  "warehouseman.panel.noWarehouse": "Brak przypisanego magazynu",
+  "warehouseman.panel.signOut": "Wyloguj się",
   "warehouseman.panel.title": "Panel magazyniera",
   "warehouseman.stub.back": "Wróć",
   "warehouseman.stub.notImplemented": "Ta operacja nie jest jeszcze dostępna."

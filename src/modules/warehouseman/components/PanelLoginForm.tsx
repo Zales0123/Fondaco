@@ -76,11 +76,11 @@ export function PanelLoginForm() {
             name="email"
             autoComplete="username"
             required
-            // The wrapper's 1px borders come out of the inner element's height, so a
-            // 64px wrapper leaves a 62px input. Sizing the wrapper at 66px lets the
-            // input itself clear the 64px glove target, and `h-full` makes it fill the
-            // box so a tap anywhere in the field focuses it rather than nothing.
-            className="h-[66px]"
+            // The wrapper's 1px borders come out of the inner element's height, so an
+            // `h-16` wrapper leaves a 62px input. The next step on the scale clears the
+            // 64px glove target, and `h-full` makes the input fill the box so a tap
+            // anywhere in the field focuses it rather than nothing.
+            className="h-18"
             inputClassName="h-full text-lg"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
@@ -93,7 +93,7 @@ export function PanelLoginForm() {
             name="password"
             autoComplete="current-password"
             required
-            className="h-[66px]"
+            className="h-18"
             inputClassName="h-full text-lg"
             // The reveal toggle is a ~16px target sitting ~8px from the field, which no
             // gloved hand can hit without also hitting the input. Gloves lose the toggle.
