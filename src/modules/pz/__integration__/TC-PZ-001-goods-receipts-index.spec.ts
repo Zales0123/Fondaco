@@ -52,8 +52,10 @@ test.describe('TC-PZ-001 goods receipts index', () => {
   test('a user without the view feature is refused the page, the endpoint and the sidebar item', async ({ context, page }) => {
     await login(context.request, EMPLOYEE.email, EMPLOYEE.password)
 
+    // Pinned to 403 rather than "any 4xx": a crashing endpoint would satisfy a loose
+    // assertion and report the authorization gate as working.
     const refused = await context.request.get('/api/pz/goods-receipts?pageSize=1', { failOnStatusCode: false })
-    expect(refused.status(), `list -> ${refused.status()}: ${await refused.text()}`).toBeGreaterThanOrEqual(400)
+    expect(refused.status(), `list -> ${refused.status()}: ${await refused.text()}`).toBe(403)
 
     await page.goto(INDEX_PATH)
     await expect(page.getByRole('heading', { name: PAGE_TITLE })).toHaveCount(0)

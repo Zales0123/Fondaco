@@ -44,26 +44,46 @@ type PzReadDatabase = {
   }
 }
 
+/**
+ * Mirrors the scope the CRUD factory applied to the headers themselves: `null` is the only
+ * value that means unrestricted within the tenant, and an empty array is deny-all — the
+ * factory short-circuits that case to an empty page, so widening it back to the selected
+ * organization here would count lines the caller was refused the headers for.
+ */
+function resolveScopedOrganizationIds(ctx: CrudCtx): string[] | null {
+  if (ctx.organizationIds === null) return null
+  if (!Array.isArray(ctx.organizationIds)) return []
+  return Array.from(
+    new Set(ctx.organizationIds.filter((value): value is string => typeof value === 'string' && value.length > 0)),
+  )
+}
+
 async function decorateLineCounts(
   payload: { items?: GoodsReceiptListItem[] },
   ctx: CrudCtx,
 ): Promise<void> {
   const items = Array.isArray(payload.items) ? payload.items : []
   if (items.length === 0) return
+  // No trusted tenant means no trusted count. Leaving every `lineCount` at its serialised
+  // 0 is the fail-closed answer; an unscoped aggregate is not.
   const tenantId = ctx.auth?.tenantId ?? null
   if (!tenantId) return
+  const scopedOrgIds = resolveScopedOrganizationIds(ctx)
+  if (scopedOrgIds !== null && scopedOrgIds.length === 0) return
 
   const ids = items.map((item) => item.id)
   const em = ctx.container.resolve<EntityManager>('em')
-  const rows = await em
+  let query = em
     .getKysely<PzReadDatabase>()
     .selectFrom('pz_goods_receipt_lines')
     .select('goods_receipt_id')
     .select((eb) => eb.fn.count<string>('id').as('line_count'))
     .where('goods_receipt_id', 'in', ids)
     .where('tenant_id', '=', tenantId)
-    .groupBy('goods_receipt_id')
-    .execute()
+  // The foreign key does not constrain a line's scope to its header's, so the count
+  // repeats the caller's organization predicate instead of trusting the parent id alone.
+  if (scopedOrgIds !== null) query = query.where('organization_id', 'in', scopedOrgIds)
+  const rows = await query.groupBy('goods_receipt_id').execute()
 
   const counts = new Map(rows.map((row) => [String(row.goods_receipt_id), Number(row.line_count)]))
   for (const item of items) {
@@ -105,6 +125,9 @@ export const { metadata, GET } = makeCrudRoute({
       updatedAt: F.updated_at,
     },
     defaultSort: { field: 'documentDate', dir: 'desc' },
+    // Document Date is day-granular, so same-day receipts would otherwise come back in
+    // the database's arbitrary row order and duplicate or skip rows across pages.
+    tiebreakSortField: 'id',
     buildFilters: async (query: GoodsReceiptListQuery) => {
       const filters: Record<string, unknown> = {}
       if (query.id) filters[F.id] = query.id
