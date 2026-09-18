@@ -1,0 +1,35 @@
+# Worktrunk project configuration — https://worktrunk.dev
+#
+# Each worktree runs the full dev stack in its own compose project
+# (`fondaco-<branch>`), overlaid with docker/compose.worktree.yml so nothing is
+# published to the host. Services are reached over OrbStack domains:
+#
+#   app     http://app.fondaco-<branch>.orb.local
+#   db      postgres.fondaco-<branch>.orb.local:5432
+#
+# `COMPOSE_PROJECT_NAME` is pinned into the worktree `.env` so *any* compose
+# invocation in that directory (including the infra-only `docker-compose.yml`)
+# lands in the same project the pre-remove hook tears down.
+#
+# Host-side node_modules are copied for the editor and `yarn typecheck`/jest;
+# the app container installs its own into the `app_node_modules` volume.
+
+[pre-start]
+copy = "wt step copy-ignored"
+
+[post-start]
+deps = "yarn install"
+stack = "node scripts/wt-worktree-env.mjs fondaco-{{ branch | sanitize | lower }} && COMPOSE_PROJECT_NAME=fondaco-{{ branch | sanitize | lower }} docker compose -f docker-compose.fullapp.dev.yml -f docker/compose.worktree.yml up -d"
+
+[pre-remove]
+stack = "COMPOSE_PROJECT_NAME=fondaco-{{ branch | sanitize | lower }} docker compose -f docker-compose.fullapp.dev.yml -f docker/compose.worktree.yml down -v --remove-orphans"
+infra = "COMPOSE_PROJECT_NAME=fondaco-{{ branch | sanitize | lower }} docker compose -f docker-compose.yml --profile agents down -v --remove-orphans"
+
+[list]
+url = "http://app.fondaco-{{ branch | sanitize | lower }}.orb.local"
+
+[step.copy-ignored]
+exclude = [".next/", ".turbo/", ".cache/", "storage/", "data/", ".events/", ".queue", ".ai/qa/", ".ai/framework-context/"]
+
+[aliases]
+stack = "COMPOSE_PROJECT_NAME=fondaco-{{ branch | sanitize | lower }} docker compose -f docker-compose.fullapp.dev.yml -f docker/compose.worktree.yml"
