@@ -1,5 +1,17 @@
 {
-  "warehouseman.panel.title": "Warehouseman panel",
+  "warehouseman.actions.receiving": "Goods receipt",
+  "warehouseman.actions.scan": "Scan product",
+  "warehouseman.actions.stocktake": "Stocktake",
+  "warehouseman.actions.transfer": "Transfer",
+  "warehouseman.login.email": "Email",
+  "warehouseman.login.failed": "Wrong email or password.",
+  "warehouseman.login.password": "Password",
+  "warehouseman.login.submit": "Sign in",
+  "warehouseman.login.submitting": "Signing in…",
+  "warehouseman.login.title": "Warehouseman panel sign in",
   "warehouseman.panel.greeting": "Welcome",
-  "warehouseman.panel.loading": "Loading…"
+  "warehouseman.panel.loading": "Loading…",
+  "warehouseman.panel.title": "Warehouseman panel",
+  "warehouseman.stub.back": "Back",
+  "warehouseman.stub.notImplemented": "This operation is not available yet."
 }

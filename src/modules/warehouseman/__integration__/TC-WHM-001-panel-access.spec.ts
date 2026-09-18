@@ -66,15 +66,33 @@ test.describe('TC-WHM-001 warehouseman panel access', () => {
     }
   })
 
-  test('a warehouseman reaches the panel', async ({ context, page }) => {
-    await login(context.request, warehousemanEmail, WAREHOUSEMAN_PASSWORD)
-    await page.goto('/warehouseman')
+  test('a warehouseman signs in on the panel login page and reaches the panel', async ({ page }) => {
+    // Signing in through the panel's own page rather than the API, because the page
+    // being usable is itself the thing under test.
+    await page.goto('/warehouseman/login')
+    await page.getByLabel(/E-mail|Email/).fill(warehousemanEmail)
+    await page.getByLabel(/Hasło|Password/).fill(WAREHOUSEMAN_PASSWORD)
+    await page.getByRole('button', { name: /Zaloguj się|Sign in/ }).click()
     await expect(page.getByRole('heading', { name: PANEL_TITLE })).toBeVisible()
+    await expect(page).toHaveURL(/\/warehouseman$/)
   })
 
-  test('a user without panel access is refused', async ({ context, page }) => {
-    await login(context.request, EMPLOYEE.email, EMPLOYEE.password)
-    await page.goto('/warehouseman')
+  test('a wrong password leaves the error on the login page', async ({ page }) => {
+    await page.goto('/warehouseman/login')
+    await page.getByLabel(/E-mail|Email/).fill(warehousemanEmail)
+    await page.getByLabel(/Hasło|Password/).fill('definitely-not-the-password')
+    await page.getByRole('button', { name: /Zaloguj się|Sign in/ }).click()
+    // The visitor must stay here and see why. An unhandled 401 would bounce them to
+    // session refresh instead, which reads as the page silently throwing them out.
+    await expect(page).toHaveURL(/\/warehouseman\/login$/)
+    await expect(page.getByRole('alert')).toBeVisible()
+  })
+
+  test('a user without panel access is refused after signing in on the panel login', async ({ page }) => {
+    await page.goto('/warehouseman/login')
+    await page.getByLabel(/E-mail|Email/).fill(EMPLOYEE.email)
+    await page.getByLabel(/Hasło|Password/).fill(EMPLOYEE.password)
+    await page.getByRole('button', { name: /Zaloguj się|Sign in/ }).click()
     await expect(page.getByRole('heading', { name: PANEL_TITLE })).toHaveCount(0)
     await expect(page.getByText(ACCESS_DENIED)).toBeVisible()
   })

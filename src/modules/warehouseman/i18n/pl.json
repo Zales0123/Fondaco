@@ -1,5 +1,17 @@
 {
-  "warehouseman.panel.title": "Panel magazyniera",
+  "warehouseman.actions.receiving": "Przyjęcie towaru",
+  "warehouseman.actions.scan": "Skanuj produkt",
+  "warehouseman.actions.stocktake": "Inwentaryzacja",
+  "warehouseman.actions.transfer": "Przesunięcie",
+  "warehouseman.login.email": "E-mail",
+  "warehouseman.login.failed": "Nieprawidłowy e-mail lub hasło.",
+  "warehouseman.login.password": "Hasło",
+  "warehouseman.login.submit": "Zaloguj się",
+  "warehouseman.login.submitting": "Logowanie…",
+  "warehouseman.login.title": "Logowanie do panelu magazyniera",
   "warehouseman.panel.greeting": "Witaj",
-  "warehouseman.panel.loading": "Ładowanie…"
+  "warehouseman.panel.loading": "Ładowanie…",
+  "warehouseman.panel.title": "Panel magazyniera",
+  "warehouseman.stub.back": "Wróć",
+  "warehouseman.stub.notImplemented": "Ta operacja nie jest jeszcze dostępna."
 }
