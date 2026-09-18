@@ -1,0 +1,15 @@
+{
+  "pz.goodsReceipts.page.title": "Przyjęcia zewnętrzne",
+  "pz.goodsReceipts.status.draft": "Szkic",
+  "pz.goodsReceipts.status.confirmed": "Zatwierdzone",
+  "pz.goodsReceipts.table.column.documentNumber": "Numer dokumentu",
+  "pz.goodsReceipts.table.column.documentDate": "Data dokumentu",
+  "pz.goodsReceipts.table.column.supplier": "Dostawca",
+  "pz.goodsReceipts.table.column.warehouse": "Magazyn",
+  "pz.goodsReceipts.table.column.status": "Status",
+  "pz.goodsReceipts.table.column.lineCount": "Pozycje",
+  "pz.goodsReceipts.table.warehouse.unknown": "Nieznany magazyn",
+  "pz.goodsReceipts.table.empty.title": "Brak przyjęć zewnętrznych",
+  "pz.goodsReceipts.table.empty.description": "Nie zarejestrowano jeszcze żadnej dostawy.",
+  "pz.goodsReceipts.table.error.load": "Nie udało się wczytać przyjęć zewnętrznych."
+}

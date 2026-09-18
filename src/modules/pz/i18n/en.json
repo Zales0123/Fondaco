@@ -1,0 +1,15 @@
+{
+  "pz.goodsReceipts.page.title": "Goods Receipts",
+  "pz.goodsReceipts.status.draft": "Draft",
+  "pz.goodsReceipts.status.confirmed": "Confirmed",
+  "pz.goodsReceipts.table.column.documentNumber": "Document Number",
+  "pz.goodsReceipts.table.column.documentDate": "Document Date",
+  "pz.goodsReceipts.table.column.supplier": "Supplier",
+  "pz.goodsReceipts.table.column.warehouse": "Warehouse",
+  "pz.goodsReceipts.table.column.status": "Status",
+  "pz.goodsReceipts.table.column.lineCount": "Lines",
+  "pz.goodsReceipts.table.warehouse.unknown": "Unknown warehouse",
+  "pz.goodsReceipts.table.empty.title": "No goods receipts yet",
+  "pz.goodsReceipts.table.empty.description": "No deliveries have been recorded yet.",
+  "pz.goodsReceipts.table.error.load": "Could not load goods receipts."
+}
