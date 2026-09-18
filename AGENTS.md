@@ -125,3 +125,17 @@ Load `.ai/guides/modules/<id>/index.md` only for a targeted installed module/hos
 2. Discovery change: run `yarn generate`; then the smallest gate/integration paths.
 
 Precedence: root→BC→installed `AGENTS.md`→facts; stop on skew/conflict; never guess.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as GitHub issues in `Zales0123/Fondaco`, managed with the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical roles, each label string equal to its name. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
