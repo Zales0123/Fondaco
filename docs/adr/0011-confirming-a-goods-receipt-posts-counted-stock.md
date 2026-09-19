@@ -3,6 +3,9 @@
 Supersedes [ADR-0005](0005-goods-receipts-are-record-only.md), whose reasoning for leaving the seam
 open still stands and is the argument this decision answers.
 
+Extended by [ADR-0013](0013-stock-posting-is-on-by-default.md): the toggle below is on by default in
+this app, so every consequence here applies to a fresh install.
+
 Confirming a goods receipt now puts its counted goods into `wms` stock, through exactly the route
 ADR-0005 reserved: a subscriber on `pz.goods_receipt.confirmed` calling `wms.inventory.receive` with
 `referenceType: 'manual'` and the receipt id as `referenceId`, gated by the upstream default-off

@@ -1,16 +1,21 @@
 import { hash } from 'bcryptjs'
+import type { AwilixContainer } from 'awilix'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { ModuleSetupConfig } from '@open-mercato/shared/modules/setup'
 import { ensureRoles } from '@open-mercato/core/modules/auth/lib/setup-app'
 import { Role, User, UserRole } from '@open-mercato/core/modules/auth/data/entities'
 import { computeEmailHash } from '@open-mercato/core/modules/auth/lib/emailHash'
-import { Warehouse } from '@open-mercato/core/modules/wms/data/entities'
+import { Warehouse, WarehouseLocation } from '@open-mercato/core/modules/wms/data/entities'
+import type { CommandBus, CommandRuntimeContext } from '@open-mercato/shared/lib/commands'
 import { setCustomFieldsIfAny } from '@open-mercato/shared/lib/commands/helpers'
 import type { DataEngine } from '@open-mercato/shared/lib/data/engine'
 import { E } from '#generated/entities.ids.generated'
 import { createLogger } from '@open-mercato/shared/lib/logger'
+import { DEFAULT_DESTINATION_FIELD_KEY } from '@/modules/pz/lib/customFields'
+import { readDefaultDestinationId } from '@/modules/pz/lib/destinations'
 import { resolveSeedWarehouseman } from './lib/demoCredentials'
 import { ASSIGNED_WAREHOUSE_FIELD_KEY } from './lib/customFields'
+import { DEMO_DEFAULT_DESTINATION_CODE, seedDemoLocations } from './lib/demoWarehouseLocations'
 
 const DEMO_WAREHOUSE_CODE = 'DEMO-WH'
 const DEMO_WAREHOUSE_NAME = 'Magazyn Demonstracyjny'
@@ -75,8 +80,9 @@ export const setup: ModuleSetupConfig = {
   },
 
   /**
-   * A demo warehouseman, so a fresh environment can open the panel without anyone
-   * hand-building an account first. This hook is skipped by `--no-examples`, and the
+   * A demo warehouseman and a warehouse they can actually receive into, so a fresh
+   * environment can walk the panel end to end without anyone hand-building an account
+   * or a location tree first. This hook is skipped by `--no-examples`, and the
    * credentials resolver refuses to invent a well-known password in production — an
    * operator there has to choose one explicitly via OM_INIT_WAREHOUSEMAN_PASSWORD.
    */
@@ -88,15 +94,24 @@ export const setup: ModuleSetupConfig = {
     }
 
     const scope = { tenantId, organizationId }
-    const userId = await ensureDemoWarehouseman(em, { ...scope, ...credentials })
-    if (!userId) return
+    const dataEngine = container.resolve('dataEngine') as DataEngine
 
+    // The warehouse and its shape are ensured before the account and regardless of it.
+    // They are structure rather than somebody's decision, so every run converges on
+    // them — including a run over a database that already holds the demo account from
+    // before this module seeded any locations, which would otherwise keep a warehouse
+    // the floor can count into but never confirm (ADR-0011).
     const warehouseId = await ensureDemoWarehouse(em, scope)
-    if (!warehouseId) return
+    if (warehouseId) {
+      const locations = await ensureDemoWarehouseLocations(em, container, scope, warehouseId)
+      await ensureDefaultDestination(em, dataEngine, scope, warehouseId, locations)
+    }
+
+    const userId = await ensureDemoWarehouseman(em, { ...scope, ...credentials })
+    if (!userId || !warehouseId) return
 
     // Only a freshly seeded account is given a warehouse. Re-running the seed must
     // never overwrite an assignment somebody made on purpose.
-    const dataEngine = container.resolve('dataEngine') as DataEngine
     await setCustomFieldsIfAny({
       dataEngine,
       entityId: E.auth.user,
@@ -142,6 +157,154 @@ async function ensureDemoWarehouse(
     logger.warn('Skipping the demo warehouse: the wms module is unavailable', { err: error })
     return null
   }
+}
+
+/**
+ * Trusted, non-interactive command context, exactly as `wms_fixtures` builds one:
+ * `organizationScope` stays null so `ensureOrganizationScope` takes its system/worker
+ * branch and validates against `selectedOrganizationId`, while `auth` carries a real
+ * actor so the wms commands' audit rows and `resolveScope(ctx)` lookups resolve.
+ */
+function buildCommandContext(
+  container: AwilixContainer,
+  scope: { tenantId: string; organizationId: string },
+  actorUserId: string,
+): CommandRuntimeContext {
+  return {
+    container,
+    auth: { sub: actorUserId, tenantId: scope.tenantId, orgId: scope.organizationId, roles: ['admin'] },
+    organizationScope: null,
+    selectedOrganizationId: scope.organizationId,
+    organizationIds: [scope.organizationId],
+    request: undefined,
+    systemActor: true,
+  }
+}
+
+/**
+ * The demo warehouse's locations, so the delivery the floor counts there can also be
+ * confirmed: posting names one eligible Warehouse Location and confirmation is refused
+ * outright when the warehouse offers none (ADR-0011).
+ *
+ * Written through `wms.locations.create` rather than the ORM, for the reason
+ * `wms_fixtures` gives: the location tree is `wms`'s to maintain, code uniqueness and
+ * parent resolution live inside that command, and a row written past it is exactly the
+ * drift the wms verifiers exist to catch. Failures are logged and swallowed — `wms` is
+ * an optional peer, and a demo without a location tree is worse than `mercato init`
+ * falling over.
+ */
+async function ensureDemoWarehouseLocations(
+  em: EntityManager,
+  container: AwilixContainer,
+  scope: { tenantId: string; organizationId: string },
+  warehouseId: string,
+): Promise<Map<string, string>> {
+  // Hoisted so a run that dies halfway still answers with what the warehouse already
+  // had. The rest is picked up by the next run, which converges by code.
+  let existing = new Map<string, string>()
+  try {
+    const existingRows = await em.find(WarehouseLocation, {
+      warehouse: warehouseId,
+      tenantId: scope.tenantId,
+      organizationId: scope.organizationId,
+      deletedAt: null,
+    })
+    existing = new Map(existingRows.map((row) => [row.code, String(row.id)]))
+
+    const actorUserId = await resolveActorUserId(em, scope.tenantId)
+    if (!actorUserId) {
+      logger.warn('Skipping the demo warehouse locations: this tenant has no user to attribute them to')
+      return existing
+    }
+
+    const commandBus = container.resolve<CommandBus>('commandBus')
+    const ctx = buildCommandContext(container, scope, actorUserId)
+    let created = 0
+
+    const locations = await seedDemoLocations({
+      existing,
+      createLocation: async ({ code, type, parentId, capacityUnits }) => {
+        const { result } = await commandBus.execute<unknown, { locationId: string }>('wms.locations.create', {
+          input: {
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            warehouseId,
+            code,
+            type,
+            parentId,
+            isActive: true,
+            capacityUnits,
+          },
+          ctx,
+        })
+        created += 1
+        return result.locationId
+      },
+    })
+
+    if (created > 0) logger.info('Seeded the demo warehouse locations', { code: DEMO_WAREHOUSE_CODE, created })
+    return locations
+  } catch (error) {
+    logger.warn('Skipping the demo warehouse locations: the wms module is unavailable', { err: error })
+    return existing
+  }
+}
+
+/**
+ * The warehouse's Default Destination, so the panel's destination picker preselects the
+ * receiving staging instead of asking the floor to choose on every delivery.
+ *
+ * The field is declared by `pz` (its `ce.ts`), not by this module, so the definition may
+ * legitimately be missing — on a tenant that predates `pz`, or if the definitions pass
+ * has not reached it. Setting a value that has no definition is a skip with a log, never
+ * a crash: a warehouse without a default still confirms, it just asks for a choice.
+ *
+ * An existing value is left alone for the same reason an existing warehouse assignment
+ * is: it may be somebody's deliberate choice.
+ */
+async function ensureDefaultDestination(
+  em: EntityManager,
+  dataEngine: DataEngine,
+  scope: { tenantId: string; organizationId: string },
+  warehouseId: string,
+  locations: ReadonlyMap<string, string>,
+): Promise<void> {
+  const destinationId = locations.get(DEMO_DEFAULT_DESTINATION_CODE)
+  if (!destinationId) return
+
+  try {
+    const current = await readDefaultDestinationId(em, scope, warehouseId)
+    if (current) return
+
+    await setCustomFieldsIfAny({
+      dataEngine,
+      entityId: E.wms.warehouse,
+      recordId: warehouseId,
+      tenantId: scope.tenantId,
+      organizationId: scope.organizationId,
+      values: { [DEFAULT_DESTINATION_FIELD_KEY]: destinationId },
+    })
+    logger.info('Preselected the demo warehouse default destination', {
+      code: DEMO_DEFAULT_DESTINATION_CODE,
+    })
+  } catch (error) {
+    logger.warn('Skipping the demo warehouse default destination: the pz custom field is unavailable', {
+      err: error,
+    })
+  }
+}
+
+/**
+ * Somebody to attribute the seeded locations to. The tenant's oldest account is the one
+ * `mercato init` created first, which is the same actor `wms_fixtures` picks.
+ */
+async function resolveActorUserId(em: EntityManager, tenantId: string): Promise<string | null> {
+  const user = await em.findOne(
+    User,
+    { tenantId, deletedAt: null },
+    { orderBy: { createdAt: 'asc', id: 'asc' } },
+  )
+  return user ? String(user.id) : null
 }
 
 async function ensureDemoWarehouseman(
