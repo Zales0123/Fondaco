@@ -56,6 +56,38 @@ export type PalletCodeMatch = {
   status: PalletStatus
 }
 
+export type PalletDamageReportStatus = 'open' | 'resolved'
+
+export type PalletDamageReport = {
+  id: string
+  palletId: string
+  catalogVariantId: string
+  name: string
+  sku: string | null
+  quantity: string
+  photoAttachmentId: string | null
+  note: string | null
+  status: PalletDamageReportStatus
+  resolutionNote: string | null
+  reportedBy: string
+  resolvedBy: string | null
+  resolvedAt: string | null
+  createdAt: string | null
+  updatedAt: string | null
+}
+
+/** What filing or resolving a report answers with — never the whole list row. */
+export type PalletDamageReportWriteResult = {
+  id: string
+  palletId: string
+  status: PalletDamageReportStatus
+  quantity: string
+  updatedAt: string
+}
+
+/** `entityId` a damage report photo is uploaded under (see `pz.palletDamageReports`). */
+const PALLET_DAMAGE_REPORT_ATTACHMENT_ENTITY_ID = 'pz:pallet_damage_report'
+
 export type ResolvedVariant = {
   catalogVariantId: string
   catalogProductId: string
@@ -218,6 +250,43 @@ export async function updatePalletLine(input: {
 
 export async function deletePalletLine(id: string, expectedVersion: string | null): Promise<void> {
   await send<{ id: string }>('/api/pz/pallet-lines', 'DELETE', { id }, expectedVersion)
+}
+
+/**
+ * Uploads a damage report's photo ahead of filing the report itself: the report does not
+ * exist yet, so `recordId` is the id the caller has already minted for it and will send as
+ * `id` to {@link createDamageReport}. Throws on failure — the caller decides whether a photo
+ * that failed to upload should still let the report go through without one.
+ */
+export async function uploadDamageReportPhoto(reportId: string, file: File): Promise<string> {
+  const form = new FormData()
+  form.set('entityId', PALLET_DAMAGE_REPORT_ATTACHMENT_ENTITY_ID)
+  form.set('recordId', reportId)
+  form.set('file', file)
+  const call = await apiCall<{ item?: { id: string }; error?: string }>('/api/attachments', {
+    method: 'POST',
+    body: form,
+  })
+  if (!call.ok || !call.result?.item?.id) throw toApiError(call.status, call.result)
+  return call.result.item.id
+}
+
+/** Files damage against a product on the pallet. `id` must match the photo's `recordId`, if any. */
+export async function createDamageReport(input: {
+  id?: string
+  palletId: string
+  catalogVariantId: string
+  quantity: string
+  note: string | null
+  photoAttachmentId: string | null
+}): Promise<PalletDamageReportWriteResult> {
+  return send<PalletDamageReportWriteResult>('/api/pz/pallet-damage-reports', 'POST', input)
+}
+
+export async function fetchPalletDamageReports(palletId: string): Promise<PalletDamageReport[]> {
+  return readList<PalletDamageReport>(
+    `/api/pz/pallet-damage-reports?palletId=${encodeURIComponent(palletId)}&pageSize=100`,
+  )
 }
 
 /** Throws 404 when no catalog variant carries the barcode, which opens the product picker. */

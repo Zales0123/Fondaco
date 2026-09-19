@@ -179,7 +179,7 @@ async function lockPalletForCount(
   return pallet
 }
 
-function requireOpenPallet(pallet: Pallet, translate: TranslateFn): void {
+export function requireOpenPallet(pallet: Pallet, translate: TranslateFn): void {
   if (pallet.status !== 'open') {
     throw conflict(
       translate(
@@ -223,7 +223,7 @@ type ProductRow = { id: string; title: string | null }
  * pallet must be a product this caller may actually see, and its name must be the one the
  * catalog held at that moment (ADR-0007).
  */
-async function resolveCountedVariant(
+export async function resolveCountedVariant(
   ctx: CommandRuntimeContext,
   scope: GoodsReceiptScope,
   catalogVariantId: string,

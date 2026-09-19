@@ -2,7 +2,7 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, LockOpen, Pencil, Printer, Trash2 } from 'lucide-react'
+import { Check, LockOpen, Pencil, Printer, Trash2, TriangleAlert } from 'lucide-react'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Input } from '@open-mercato/ui/primitives/input'
 import { IconButton } from '@open-mercato/ui/primitives/icon-button'
@@ -28,6 +28,7 @@ import { ScanQuantityStep } from './ScanQuantityStep'
 import {
   closePallet,
   countPalletLine,
+  createDamageReport,
   deletePalletLine,
   fetchPalletLines,
   fetchPallets,
@@ -37,6 +38,7 @@ import {
   resolveVariantByBarcode,
   searchCatalogVariants,
   updatePalletLine,
+  uploadDamageReportPhoto,
   ReceivingApiError,
   type Pallet,
   type PalletLine,
@@ -99,6 +101,11 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
   const [submitting, setSubmitting] = React.useState(false)
   const [editing, setEditing] = React.useState<{ id: string; value: string } | null>(null)
   const [rowError, setRowError] = React.useState<{ id: string; message: string } | null>(null)
+  // The damage form is opened per row, so the draft carries the line it belongs to: the list
+  // re-renders as counts land and a form must never be read against a different product.
+  const [damageDraft, setDamageDraft] = React.useState<{ id: string; quantity: string; note: string; photo: File | null } | null>(null)
+  const [damageSubmitting, setDamageSubmitting] = React.useState(false)
+  const [damageError, setDamageError] = React.useState<{ id: string; message: string } | null>(null)
   // The notice carries the pallet it is about: this screen is reused when one pallet is
   // opened after another, and a label warning must never be read against the wrong pallet.
   const [labelNotice, setLabelNotice] = React.useState<(PalletLabelNotice & { palletId: string }) | null>(null)
@@ -406,6 +413,52 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
   }
 
   /**
+   * Damaged goods are reported against the counted line, not deducted from it: the count
+   * records what arrived, the report records what arrived broken. The photo is uploaded
+   * first so a report is never filed pointing at an attachment that failed to land.
+   */
+  async function onSubmitDamage(line: PalletLine) {
+    if (!damageDraft) return
+    setDamageError(null)
+    const parsed = parseCountQuantity(damageDraft.quantity)
+    if (!parsed) {
+      setDamageError({ id: line.id, message: t('pz.palletDamageReports.errors.quantityInvalid') })
+      return
+    }
+    setDamageSubmitting(true)
+    try {
+      const reportId = damageDraft.photo ? crypto.randomUUID() : undefined
+      let photoAttachmentId: string | null = null
+      if (damageDraft.photo && reportId) {
+        try {
+          photoAttachmentId = await uploadDamageReportPhoto(reportId, damageDraft.photo)
+        } catch (error) {
+          setDamageError({ id: line.id, message: messageOf(error, t('warehouseman.receiving.count.damage.photoUploadError')) })
+          return
+        }
+      }
+      await createDamageReport({
+        id: reportId,
+        palletId,
+        catalogVariantId: line.catalogVariantId,
+        quantity: parsed,
+        note: damageDraft.note.trim() || null,
+        photoAttachmentId,
+      })
+      setAnnouncement(
+        t('warehouseman.receiving.count.damage.success', undefined, {
+          product: productLabel(line.name, unknownProduct),
+        }),
+      )
+      setDamageDraft(null)
+    } catch (error) {
+      setDamageError({ id: line.id, message: messageOf(error, t('warehouseman.receiving.count.damage.error')) })
+    } finally {
+      setDamageSubmitting(false)
+    }
+  }
+
+  /**
    * A torn or missing sticker, reprinted. Nothing about the pallet changes, so a printer
    * that refuses is a warning here too — the count carries on either way.
    */
@@ -673,11 +726,99 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
                       >
                         <Trash2 className="size-6" aria-hidden="true" />
                       </IconButton>
+                      <IconButton
+                        type="button"
+                        variant="outline"
+                        className="size-14 shrink-0 border-2"
+                        aria-label={t('warehouseman.receiving.count.damage.title', undefined, {
+                          product: productLabel(line.name, unknownProduct),
+                        })}
+                        disabled={closed}
+                        onClick={() => {
+                          setDamageError(null)
+                          setDamageDraft({ id: line.id, quantity: formatCountQuantity(line.quantity), note: '', photo: null })
+                        }}
+                      >
+                        <TriangleAlert className="size-6" aria-hidden="true" />
+                      </IconButton>
                     </div>
                   )}
                   {rowError?.id === line.id ? (
                     <div className="mt-3">
                       <ScreenError>{rowError.message}</ScreenError>
+                    </div>
+                  ) : null}
+                  {damageDraft?.id === line.id ? (
+                    <div className="mt-3 flex flex-col gap-3 rounded-lg border-2 border-border p-3">
+                      <span className="text-lg font-bold">
+                        {t('warehouseman.receiving.count.damage.title', undefined, {
+                          product: productLabel(line.name, unknownProduct),
+                        })}
+                      </span>
+                      <label className="flex flex-col gap-2">
+                        <span className="text-lg font-semibold">
+                          {t('warehouseman.receiving.count.damage.quantity.label')}
+                        </span>
+                        <Input
+                          value={damageDraft.quantity}
+                          inputMode="decimal"
+                          className="h-20 min-w-0 border-2 px-4"
+                          inputClassName="h-full text-2xl font-bold"
+                          disabled={damageSubmitting}
+                          onChange={(event) => setDamageDraft({ ...damageDraft, quantity: event.target.value })}
+                        />
+                      </label>
+                      <label className="flex flex-col gap-2">
+                        <span className="text-lg font-semibold">
+                          {t('warehouseman.receiving.count.damage.note.label')}
+                        </span>
+                        <Input
+                          value={damageDraft.note}
+                          className="h-20 min-w-0 border-2 px-4"
+                          inputClassName="h-full text-lg"
+                          placeholder={t('warehouseman.receiving.count.damage.note.placeholder')}
+                          disabled={damageSubmitting}
+                          onChange={(event) => setDamageDraft({ ...damageDraft, note: event.target.value })}
+                        />
+                      </label>
+                      <label className="flex flex-col gap-2">
+                        <span className="text-lg font-semibold">
+                          {t('warehouseman.receiving.count.damage.photo.label')}
+                        </span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          className="text-lg"
+                          disabled={damageSubmitting}
+                          onChange={(event) => setDamageDraft({ ...damageDraft, photo: event.target.files?.[0] ?? null })}
+                        />
+                      </label>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          className={PANEL_ACTION}
+                          disabled={damageSubmitting}
+                          onClick={() => { void onSubmitDamage(line) }}
+                        >
+                          {damageSubmitting
+                            ? t('warehouseman.receiving.count.damage.submitting')
+                            : t('warehouseman.receiving.count.damage.submit')}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className={`${PANEL_ACTION} border-2`}
+                          disabled={damageSubmitting}
+                          onClick={() => {
+                            setDamageDraft(null)
+                            setDamageError(null)
+                          }}
+                        >
+                          {t('warehouseman.receiving.count.damage.cancel')}
+                        </Button>
+                      </div>
+                      {damageError?.id === line.id ? <ScreenError>{damageError.message}</ScreenError> : null}
                     </div>
                   ) : null}
                 </li>

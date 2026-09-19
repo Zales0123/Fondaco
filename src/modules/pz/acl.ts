@@ -41,6 +41,30 @@ export const features = [
     module: 'pz',
     dependsOn: ['pz.goodsReceipts.view'],
   },
+  {
+    /**
+     * Filing a damage report is a floor action, owned by the same feature that lets a
+     * Warehouseman count in the first place: they record what physically happened to a
+     * product on an open pallet. `attachments.manage` is a real prerequisite, not a nicety —
+     * the report's photo is uploaded through the installed attachments endpoint, which gates
+     * its own write on that feature.
+     */
+    id: 'pz.palletDamageReports.report',
+    title: 'Report damaged goods',
+    module: 'pz',
+    dependsOn: ['pz.receiving.count', 'attachments.manage'],
+  },
+  {
+    /**
+     * Resolving is the office's job, independent of the document's own status (ADR-0006 does
+     * not apply — a damage report is its own entity, not a document line), so it rides on the
+     * same grant that lets the office manage the paperwork rather than on `pz.goodsReceipts.confirm`.
+     */
+    id: 'pz.palletDamageReports.resolve',
+    title: 'Resolve damage reports',
+    module: 'pz',
+    dependsOn: ['pz.goodsReceipts.manage'],
+  },
 ]
 
 export default features

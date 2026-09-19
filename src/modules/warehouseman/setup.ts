@@ -60,6 +60,10 @@ export const setup: ModuleSetupConfig = {
       'warehouseman.panel.access',
       'pz.goodsReceipts.view',
       'pz.receiving.count',
+      // Reporting damage uploads its photo through the installed attachments endpoint,
+      // which gates its write on this feature — without it the upload step 403s.
+      'pz.palletDamageReports.report',
+      'attachments.manage',
       'wms.view',
       'catalog.products.view',
       'label_printing.print',

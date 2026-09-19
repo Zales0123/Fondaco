@@ -297,3 +297,78 @@ export class PalletLine {
   @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
   updatedAt: Date = new Date()
 }
+
+export type PalletDamageReportStatus = 'open' | 'resolved'
+
+/**
+ * A damage report is not a quantity discrepancy — `ReceivingSummary` never sees it — so it
+ * lives on its own table rather than as a flag on `PalletLine`. Unlike counting, a report is
+ * not undone by deleting the row: once filed it stays visible to the office until resolved,
+ * independently of the Goods Receipt's own status.
+ */
+@Entity({ tableName: 'pz_pallet_damage_reports' })
+@Index({
+  name: 'pz_pallet_damage_reports_scope_pallet_idx',
+  properties: ['tenantId', 'organizationId', 'pallet'],
+})
+@Index({
+  name: 'pz_pallet_damage_reports_pallet_status_idx',
+  properties: ['pallet', 'status'],
+})
+export class PalletDamageReport {
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @ManyToOne(() => Pallet, { fieldName: 'pallet_id' })
+  pallet!: Pallet
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  /** `catalog:catalog_product_variant` id — always required (ADR-0007): a damage report
+   *  about a pallet with no named product is out of scope for this feature. */
+  @Property({ name: 'catalog_variant_id', type: 'uuid' })
+  catalogVariantId!: string
+
+  @Property({ name: 'catalog_product_id', type: 'uuid' })
+  catalogProductId!: string
+
+  @Property({ name: 'catalog_snapshot', type: 'jsonb', nullable: true })
+  catalogSnapshot?: PalletLineCatalogSnapshot | null
+
+  @Property({ name: 'quantity', type: 'numeric', precision: 18, scale: 4 })
+  quantity!: string
+
+  /** Uploaded through the installed `attachments` module; no file storage of its own. */
+  @Property({ name: 'photo_attachment_id', type: 'uuid', nullable: true })
+  photoAttachmentId?: string | null
+
+  /** The Warehouseman's own note about what happened. */
+  @Property({ name: 'note', type: 'text', nullable: true })
+  note?: string | null
+
+  @Property({ type: 'text', default: 'open' })
+  status: PalletDamageReportStatus = 'open'
+
+  /** The office's note when marking the report resolved. */
+  @Property({ name: 'resolution_note', type: 'text', nullable: true })
+  resolutionNote?: string | null
+
+  @Property({ name: 'reported_by', type: 'uuid' })
+  reportedBy!: string
+
+  @Property({ name: 'resolved_by', type: 'uuid', nullable: true })
+  resolvedBy?: string | null
+
+  @Property({ name: 'resolved_at', type: Date, nullable: true })
+  resolvedAt?: Date | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+}
