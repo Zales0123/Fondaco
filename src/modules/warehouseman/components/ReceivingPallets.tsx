@@ -3,11 +3,13 @@ import * as React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ScanLine } from 'lucide-react'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Input } from '@open-mercato/ui/primitives/input'
 import { StatusBadge, type StatusBadgeVariant } from '@open-mercato/ui/primitives/status-badge'
 import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { BarcodeScannerDialog } from '@/modules/barcode_scanner/components/BarcodeScannerDialog'
 import { PanelLinkButton, ScreenEmpty, ScreenError, ScreenMessage } from './ReceivingStates'
 import {
   createPallet,
@@ -15,17 +17,20 @@ import {
   fetchPallets,
   fetchReceivingDocument,
   findPalletByCode,
-  ReceivingApiError,
+  printPalletLabel,
   type Pallet,
   type PalletStatus,
   type ReceivingDocument,
 } from '../lib/receivingApi'
 import {
+  describePalletLookupFailure,
+  describePalletPrintOutcome,
   normalizeScannedCode,
   receivingPalletHref,
   receivingSummaryHref,
   RECEIVING_LIST_HREF,
 } from '../lib/receivingPanel'
+import { stashPalletLabelNotice } from '../lib/palletLabelNotice'
 
 const PALLET_STATUS_VARIANTS: Record<PalletStatus, StatusBadgeVariant> = {
   open: 'info',
@@ -46,7 +51,13 @@ export function ReceivingPallets({ receiptId }: ReceivingPalletsProps) {
   const { confirm, ConfirmDialogElement } = useConfirmDialog()
   const [code, setCode] = React.useState('')
   const [scanError, setScanError] = React.useState<string | null>(null)
+  const [scanStatus, setScanStatus] = React.useState<string | null>(null)
+  const [scanning, setScanning] = React.useState(false)
+  const [scannerOpen, setScannerOpen] = React.useState(false)
   const [actionError, setActionError] = React.useState<string | null>(null)
+  // The camera fires `onDetected` on every frame it decodes, so the guard has to be read
+  // synchronously — a state flag would let a second lookup start inside the same tick.
+  const lookupInFlight = React.useRef(false)
 
   const document = useQuery<ReceivingDocument | null>({
     queryKey: ['warehouseman.receiving.document', receiptId],
@@ -58,8 +69,30 @@ export function ReceivingPallets({ receiptId }: ReceivingPalletsProps) {
   })
 
   const create = useMutation({
-    mutationFn: () => createPallet(receiptId),
-    onSuccess: (pallet) => {
+    mutationFn: async () => {
+      const pallet = await createPallet(receiptId)
+      // Printing is a post-commit effect. From this line on the pallet exists whatever the
+      // printer does, so a printer that is off, busy or unreachable is captured rather than
+      // thrown: it must never be reported as a failed pallet, and it must never stop the
+      // warehouseman from landing inside the pallet they just made.
+      try {
+        await printPalletLabel(pallet.id)
+        return { pallet, printFailure: null as unknown }
+      } catch (printFailure) {
+        return { pallet, printFailure }
+      }
+    },
+    onSuccess: ({ pallet, printFailure }) => {
+      // The reprint button lives on the pallet screen, which is where this navigation ends,
+      // so the outcome travels with it instead of flashing on a screen nobody stays on.
+      stashPalletLabelNotice(
+        pallet.id,
+        describePalletPrintOutcome(printFailure, {
+          success: t('warehouseman.receiving.pallets.print.success'),
+          failure: (reason) => t('warehouseman.receiving.pallets.print.failed', undefined, { reason }),
+          unknownReason: t('warehouseman.receiving.print.unknownReason'),
+        }),
+      )
       queryClient.invalidateQueries({ queryKey: ['warehouseman.receiving.pallets', receiptId] })
       router.push(receivingPalletHref(receiptId, pallet.id))
     },
@@ -72,6 +105,42 @@ export function ReceivingPallets({ receiptId }: ReceivingPalletsProps) {
     onError: (error: unknown) => setActionError(messageOf(error, t('pz.pallets.errors.deleteFailed'))),
   })
 
+  /**
+   * The panel's only pallet lookup. A typed code and a code read off a printed label meet
+   * here, so the camera can never open a pallet the keyboard would have refused — nor be
+   * refused on different terms.
+   */
+  const openPalletByCode = React.useCallback(
+    async (scanned: string) => {
+      if (lookupInFlight.current) return
+      lookupInFlight.current = true
+      setScanning(true)
+      setScanError(null)
+      setScanStatus(t('warehouseman.receiving.pallets.scanner.looking', undefined, { code: scanned }))
+      try {
+        const pallet = await findPalletByCode(scanned, receiptId)
+        setScanStatus(t('warehouseman.receiving.pallets.scanner.opening'))
+        setScannerOpen(false)
+        router.push(receivingPalletHref(receiptId, pallet.id))
+      } catch (error) {
+        // A pallet of another document is refused by name and the screen stays put: following
+        // the scan would file the goods in front of the person against the wrong delivery.
+        // The dialog stays open, so the next label is scanned without reopening the camera.
+        setScanError(
+          describePalletLookupFailure(error, {
+            notFound: t('warehouseman.receiving.pallets.scan.notFound', undefined, { code: scanned }),
+            failed: t('pz.pallets.errors.notFound'),
+          }),
+        )
+        setScanStatus(null)
+      } finally {
+        lookupInFlight.current = false
+        setScanning(false)
+      }
+    },
+    [receiptId, router, t],
+  )
+
   async function onScan(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setScanError(null)
@@ -80,18 +149,22 @@ export function ReceivingPallets({ receiptId }: ReceivingPalletsProps) {
       setScanError(t('pz.pallets.errors.codeRequired'))
       return
     }
-    try {
-      const pallet = await findPalletByCode(scanned, receiptId)
-      router.push(receivingPalletHref(receiptId, pallet.id))
-    } catch (error) {
-      // A pallet of another document is refused by name and the screen stays put: following
-      // the scan would file the goods in front of the person against the wrong delivery.
-      setScanError(
-        error instanceof ReceivingApiError && error.status === 404
-          ? t('warehouseman.receiving.pallets.scan.notFound', undefined, { code: scanned })
-          : messageOf(error, t('pz.pallets.errors.notFound')),
-      )
-    }
+    await openPalletByCode(scanned)
+  }
+
+  const onDetected = React.useCallback(
+    (raw: string) => {
+      const scanned = normalizeScannedCode(raw)
+      if (!scanned) return
+      void openPalletByCode(scanned)
+    },
+    [openPalletByCode],
+  )
+
+  function onOpenScanner() {
+    setScanError(null)
+    setScanStatus(null)
+    setScannerOpen(true)
   }
 
   async function onDelete(pallet: Pallet) {
@@ -138,24 +211,50 @@ export function ReceivingPallets({ receiptId }: ReceivingPalletsProps) {
           : t('warehouseman.receiving.pallets.create')}
       </Button>
 
+      {/* Typing stays the path that always works: over plain http a phone has no secure
+          context and therefore no camera at all, so the camera is an addition, never a
+          replacement. */}
       <form className="flex flex-col gap-2" onSubmit={onScan}>
-        <label className="flex flex-col gap-2">
-          <span className="text-lg">{t('warehouseman.receiving.pallets.scan.label')}</span>
-          <Input
-            value={code}
-            className="h-18"
-            inputClassName="h-full text-lg"
-            placeholder={t('warehouseman.receiving.pallets.scan.placeholder')}
-            autoComplete="off"
-            onChange={(event) => setCode(event.target.value)}
-          />
-        </label>
-        <Button type="submit" size="lg" variant="outline" className="h-16 w-full text-lg">
-          {t('warehouseman.receiving.pallets.scan.submit')}
+        <div className="flex items-end gap-2">
+          <label className="flex flex-1 flex-col gap-2">
+            <span className="text-lg">{t('warehouseman.receiving.pallets.scan.label')}</span>
+            <Input
+              value={code}
+              className="h-18"
+              inputClassName="h-full text-lg"
+              placeholder={t('warehouseman.receiving.pallets.scan.placeholder')}
+              autoComplete="off"
+              disabled={scanning}
+              onChange={(event) => setCode(event.target.value)}
+            />
+          </label>
+          <Button
+            type="button"
+            size="lg"
+            variant="outline"
+            className="h-18 w-18 shrink-0"
+            aria-label={t('warehouseman.receiving.pallets.scanner.open')}
+            title={t('warehouseman.receiving.pallets.scanner.open')}
+            onClick={onOpenScanner}
+            disabled={scanning}
+          >
+            <ScanLine className="size-6" aria-hidden="true" />
+          </Button>
+        </div>
+        <Button
+          type="submit"
+          size="lg"
+          variant="outline"
+          className="h-16 w-full text-lg"
+          disabled={scanning}
+        >
+          {scanning
+            ? t('warehouseman.receiving.pallets.scan.submitting')
+            : t('warehouseman.receiving.pallets.scan.submit')}
         </Button>
       </form>
 
-      {scanError ? <ScreenError>{scanError}</ScreenError> : null}
+      {scanError && !scannerOpen ? <ScreenError>{scanError}</ScreenError> : null}
       {actionError ? <ScreenError>{actionError}</ScreenError> : null}
 
       {rows.length === 0 ? (
@@ -203,6 +302,18 @@ export function ReceivingPallets({ receiptId }: ReceivingPalletsProps) {
       <PanelLinkButton href={RECEIVING_LIST_HREF}>
         {t('warehouseman.receiving.pallets.backToList')}
       </PanelLinkButton>
+      <BarcodeScannerDialog
+        open={scannerOpen}
+        onClose={() => setScannerOpen(false)}
+        onDetected={onDetected}
+        busy={scanning}
+        statusMessage={scanStatus}
+        errorMessage={scanError}
+        title={t('warehouseman.receiving.pallets.scanner.title')}
+        description={t('warehouseman.receiving.pallets.scanner.description')}
+        manualLabel={t('warehouseman.receiving.pallets.scanner.manualLabel')}
+        manualPlaceholder={t('warehouseman.receiving.pallets.scanner.manualPlaceholder')}
+      />
       {ConfirmDialogElement}
     </div>
   )

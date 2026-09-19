@@ -1,6 +1,8 @@
 import { describe, expect, it } from '@jest/globals'
 import {
   buildReceivingListQuery,
+  describePalletLookupFailure,
+  describePalletPrintOutcome,
   formatCountQuantity,
   normalizeScannedCode,
   parseCountQuantity,
@@ -44,6 +46,14 @@ describe('normalizeScannedCode', () => {
 
   it('reports an empty scan as empty', () => {
     expect(normalizeScannedCode('   ')).toBe('')
+  })
+
+  it('cleans a camera decode the same way it cleans a typed code', () => {
+    // The camera hands back the raw decoded value, padding and all, and the scan path
+    // feeds it through here before the lookup — so both paths ask for the same code.
+    expect(normalizeScannedCode(' PAL-000042 ')).toBe('PAL-000042')
+    expect(normalizeScannedCode('PAL\n000042')).toBe('PAL 000042')
+    expect(normalizeScannedCode('\t\n')).toBe('')
   })
 })
 
@@ -105,5 +115,76 @@ describe('productLabel', () => {
 
   it('keeps a real name', () => {
     expect(productLabel('Kabel USB-C 2m', 'unknown')).toBe('Kabel USB-C 2m')
+  })
+})
+
+describe('describePalletPrintOutcome', () => {
+  const messages = {
+    success: 'The pallet label is printing.',
+    failure: (reason: string) => `The pallet is there, the label is not: ${reason}`,
+    unknownReason: 'The printer did not say why.',
+  }
+
+  it('reports a printed label as a success', () => {
+    expect(describePalletPrintOutcome(null, messages)).toEqual({
+      kind: 'success',
+      message: 'The pallet label is printing.',
+    })
+  })
+
+  it('frames the printer refusal, which the server already localized', () => {
+    const busy = Object.assign(new Error('Drukarka etykiet jest zajęta.'), { status: 409 })
+    expect(describePalletPrintOutcome(busy, messages)).toEqual({
+      kind: 'warning',
+      message: 'The pallet is there, the label is not: Drukarka etykiet jest zajęta.',
+    })
+  })
+
+  it('falls back when the refusal says nothing', () => {
+    expect(describePalletPrintOutcome(Object.assign(new Error(''), { status: 503 }), messages)).toEqual({
+      kind: 'warning',
+      message: 'The pallet is there, the label is not: The printer did not say why.',
+    })
+    expect(describePalletPrintOutcome('printer exploded', messages)).toEqual({
+      kind: 'warning',
+      message: 'The pallet is there, the label is not: The printer did not say why.',
+    })
+  })
+
+  it('never reports the pallet itself as failed', () => {
+    // A printer that is off, busy, faulty or has nothing to print is still only ever a
+    // warning about the sticker: the pallet was committed before the print was attempted.
+    for (const status of [409, 422, 500, 502, 503]) {
+      const outcome = describePalletPrintOutcome(
+        Object.assign(new Error('Printer is off.'), { status }),
+        messages,
+      )
+      expect(outcome.kind).toBe('warning')
+      expect(outcome.message).toBe('The pallet is there, the label is not: Printer is off.')
+    }
+  })
+})
+
+describe('describePalletLookupFailure', () => {
+  const messages = { notFound: 'No pallet has code PAL-000042.', failed: 'Could not open the pallet.' }
+
+  it('names the code nobody has', () => {
+    expect(describePalletLookupFailure(Object.assign(new Error(''), { status: 404 }), messages))
+      .toBe('No pallet has code PAL-000042.')
+  })
+
+  it('keeps refusing a pallet that belongs to another document, by name', () => {
+    const other = Object.assign(new Error('Paleta należy do PZ/13/2026.'), { status: 409 })
+    expect(describePalletLookupFailure(other, messages)).toBe('Paleta należy do PZ/13/2026.')
+  })
+
+  it('prefers the server text over the caller fallback whenever there is one', () => {
+    const denied = Object.assign(new Error('Brak uprawnień.'), { status: 403 })
+    expect(describePalletLookupFailure(denied, messages)).toBe('Brak uprawnień.')
+  })
+
+  it('falls back when the failure says nothing at all', () => {
+    expect(describePalletLookupFailure(new Error(''), messages)).toBe('Could not open the pallet.')
+    expect(describePalletLookupFailure(undefined, messages)).toBe('Could not open the pallet.')
   })
 })

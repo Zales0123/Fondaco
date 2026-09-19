@@ -21,6 +21,7 @@ import { Label } from '@open-mercato/ui/primitives/label'
 import { Spinner } from '@open-mercato/ui/primitives/spinner'
 import { cn } from '@open-mercato/shared/lib/utils'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { resolveScannerLabels } from '../lib/scannerLabels'
 
 export type BarcodeScannerDialogProps = {
   /** Controls visibility. When false the camera MUST be fully released. */
@@ -35,6 +36,17 @@ export type BarcodeScannerDialogProps = {
   statusMessage?: string | null
   /** Optional error rendered by the parent (e.g. "No variant matches this barcode."). */
   errorMessage?: string | null
+  // Wording overrides for callers that scan something other than a product
+  // barcode (e.g. a pallet label). Already-translated strings — the caller owns
+  // its own `useT()`. Omitted or blank keeps the product-barcode copy.
+  /** Dialog heading. */
+  title?: string
+  /** Line under the heading. */
+  description?: string
+  /** Manual-entry field label. */
+  manualLabel?: string
+  /** Manual-entry field placeholder. */
+  manualPlaceholder?: string
 }
 
 /** Poll cadence for `detect()`. 100ms keeps mobile CPUs (and battery) sane. */
@@ -114,6 +126,10 @@ export function BarcodeScannerDialog({
   busy = false,
   statusMessage = null,
   errorMessage = null,
+  title,
+  description,
+  manualLabel,
+  manualPlaceholder,
 }: BarcodeScannerDialogProps): React.JSX.Element | null {
   const t = useT()
 
@@ -365,6 +381,11 @@ export function BarcodeScannerDialog({
     }
   }, [cameraError, t])
 
+  const labels = React.useMemo(
+    () => resolveScannerLabels({ title, description, manualLabel, manualPlaceholder }, t),
+    [title, description, manualLabel, manualPlaceholder, t],
+  )
+
   if (!open) return null
 
   const manualInputId = 'barcode-scanner-manual-entry'
@@ -377,13 +398,8 @@ export function BarcodeScannerDialog({
         closeAriaLabel={t('barcodeScanner.scanner.close', 'Close')}
       >
         <DialogHeader leading={<ScanLine aria-hidden="true" />} leadingTone="accent">
-          <DialogTitle>{t('barcodeScanner.scanner.title', 'Scan a barcode')}</DialogTitle>
-          <DialogDescription>
-            {t(
-              'barcodeScanner.scanner.description',
-              'Point the rear camera at a barcode. You can also type the code by hand.',
-            )}
-          </DialogDescription>
+          <DialogTitle>{labels.title}</DialogTitle>
+          <DialogDescription>{labels.description}</DialogDescription>
         </DialogHeader>
 
         {cameraErrorCopy ? (
@@ -472,9 +488,7 @@ export function BarcodeScannerDialog({
         ) : null}
 
         <div className="flex flex-col gap-2">
-          <Label htmlFor={manualInputId}>
-            {t('barcodeScanner.scanner.manualLabel', 'Or enter the barcode manually')}
-          </Label>
+          <Label htmlFor={manualInputId}>{labels.manualLabel}</Label>
           <div className="flex items-center gap-2">
             <Input
               id={manualInputId}
@@ -484,7 +498,7 @@ export function BarcodeScannerDialog({
               inputMode="text"
               autoComplete="off"
               disabled={busy}
-              placeholder={t('barcodeScanner.scanner.manualPlaceholder', 'e.g. 5901234123457')}
+              placeholder={labels.manualPlaceholder}
             />
             <Button type="button" onClick={submitManual} disabled={manualDisabled}>
               {busy ? <Spinner size="sm" /> : null}

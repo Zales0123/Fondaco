@@ -51,6 +51,11 @@ describe('label scope registry', () => {
     expect(isLabelScopeId('catalog.product')).toBe(true)
     expect(isLabelScopeId('nope')).toBe(false)
   })
+
+  it('exposes pz.pallet', () => {
+    expect(LABEL_SCOPE_IDS).toContain('pz.pallet')
+    expect(isLabelScopeId('pz.pallet')).toBe(true)
+  })
 })
 
 describe('catalog.product resolver', () => {
@@ -125,6 +130,105 @@ describe('catalog.product resolver', () => {
   it('refusals are LabelNotAvailableError, not faults', async () => {
     await expect(
       resolveLabelSubject('catalog.product', 'prod-1', ctxWith([variant({ barcode: null })])),
+    ).rejects.toBeInstanceOf(LabelNotAvailableError)
+  })
+})
+
+type PalletRow = {
+  id: string
+  code: string | null
+  tenant_id: string
+  organization_id: string
+}
+
+/**
+ * A stored-row fake rather than a canned result set: tenant and organization
+ * isolation is the thing under test for this scope, so the fake applies the
+ * same filter the SQL does instead of trusting the resolver to have asked for
+ * it. A resolver that dropped either scope column would still return rows here
+ * and the isolation tests would fail — which is the point.
+ */
+function palletCtxWith(rows: PalletRow[], onQuery?: (sql: string, params: unknown[]) => void) {
+  const em = {
+    getConnection: () => ({
+      execute: async (sql: string, params: unknown[]) => {
+        onQuery?.(sql, params)
+        const [id, tenantId, organizationId] = params as string[]
+        return rows
+          .filter((row) => row.id === id
+            && row.tenant_id === tenantId
+            && row.organization_id === organizationId)
+          .map((row) => ({ id: row.id, code: row.code }))
+      },
+    }),
+  } as unknown as EntityManager
+  return { em, tenantId: 'tenant-1', organizationId: 'org-1' }
+}
+
+const pallet = (over: Partial<PalletRow> = {}): PalletRow => ({
+  id: 'pallet-1',
+  code: 'PAL-000123',
+  tenant_id: 'tenant-1',
+  organization_id: 'org-1',
+  ...over,
+})
+
+describe('pz.pallet resolver', () => {
+  it('constrains the lookup to the session tenant and organization', async () => {
+    let seenSql = ''
+    let seen: unknown[] = []
+    await resolveLabelSubject('pz.pallet', 'pallet-1', palletCtxWith([pallet()], (sql, params) => {
+      seenSql = sql
+      seen = params
+    }))
+    // A caller-supplied pallet id must never widen the scope.
+    expect(seen).toEqual(['pallet-1', 'tenant-1', 'org-1'])
+    expect(seenSql).toContain('tenant_id = ?')
+    expect(seenSql).toContain('organization_id = ?')
+  })
+
+  it('prints the pallet code as code128', async () => {
+    const subject = await resolveLabelSubject('pz.pallet', 'pallet-1', palletCtxWith([
+      pallet({ code: 'PAL-000123' }),
+    ]))
+    expect(subject).toEqual({
+      symbology: 'code128',
+      value: 'PAL-000123',
+      describe: 'pallet PAL-000123',
+    })
+  })
+
+  it('refuses a pallet belonging to another organization', async () => {
+    await expect(
+      resolveLabelSubject('pz.pallet', 'pallet-1', palletCtxWith([
+        pallet({ organization_id: 'org-2' }),
+      ])),
+    ).rejects.toMatchObject({ messageKey: 'label_printing.print.error.noPallet' })
+  })
+
+  it('refuses a pallet belonging to another tenant', async () => {
+    await expect(
+      resolveLabelSubject('pz.pallet', 'pallet-1', palletCtxWith([
+        pallet({ tenant_id: 'tenant-2' }),
+      ])),
+    ).rejects.toMatchObject({ messageKey: 'label_printing.print.error.noPallet' })
+  })
+
+  it('refuses an unknown pallet id', async () => {
+    await expect(
+      resolveLabelSubject('pz.pallet', 'pallet-missing', palletCtxWith([pallet()])),
+    ).rejects.toMatchObject({ messageKey: 'label_printing.print.error.noPallet' })
+  })
+
+  it.each([null, '', '   '])('refuses a pallet whose code is %p', async (code) => {
+    await expect(
+      resolveLabelSubject('pz.pallet', 'pallet-1', palletCtxWith([pallet({ code })])),
+    ).rejects.toMatchObject({ messageKey: 'label_printing.print.error.noPalletCode' })
+  })
+
+  it('refusals are LabelNotAvailableError, not faults', async () => {
+    await expect(
+      resolveLabelSubject('pz.pallet', 'pallet-1', palletCtxWith([])),
     ).rejects.toBeInstanceOf(LabelNotAvailableError)
   })
 })
