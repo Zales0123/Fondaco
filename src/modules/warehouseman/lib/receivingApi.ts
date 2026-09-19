@@ -148,17 +148,21 @@ const PALLET_LABEL_SCOPE = 'pz.pallet'
 /**
  * Last resort against a request that never comes back.
  *
- * This is a backstop, not a patience setting: it must stay ABOVE what the route
- * can legitimately take, or it would abandon a slow print that is about to
- * succeed and report a failure for a label that did come out. The service bounds
- * itself at `openTimeoutMs` (30s) plus `jobTimeoutMs` (60s), so anything past
- * that is a hang rather than a slow printer.
+ * This is a backstop, not a patience setting: it stays ABOVE what the route can
+ * legitimately take, so it does not abandon a slow print that is about to
+ * succeed and report a failure for a label that did come out. The service
+ * bounds itself at `openTimeoutMs` (30s) + `jobTimeoutMs` (60s) +
+ * `closeTimeoutMs` (5s) = 95s, and the rest is slack for the work the route
+ * does outside those bounds — resolving the label subject from the database,
+ * rendering the barcode and rasterizing it. That slack is generous rather than
+ * derived: those steps are sub-second in practice, so this cannot be a proof,
+ * only a margin wide enough that hitting it means a hang.
  *
  * It does not make the wait pleasant — a dead printer still stalls the screen for
  * a minute and a half. Fixing that means not awaiting the print at all, which is
  * a change to when the effect runs, not to this bound.
  */
-const PRINT_REQUEST_TIMEOUT_MS = 95_000
+const PRINT_REQUEST_TIMEOUT_MS = 105_000
 
 /**
  * Prints one pallet's label on the NiimBot. The printer is an exclusive resource, so a

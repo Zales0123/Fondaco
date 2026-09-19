@@ -156,7 +156,9 @@ describe('createLabelPrinterService', () => {
     const working = createFakePrinter()
     let stall = true
     const service = createLabelPrinterService({
-      config: { ...config, jobTimeoutMs: 20 },
+      // One bound covers both legs: tight enough that the stall fails fast,
+      // wide enough that the real print behind it is not racing the clock.
+      config: { ...config, jobTimeoutMs: 250 },
       openTransport: async () => {
         if (!stall) return working.transport
         return {
@@ -173,5 +175,58 @@ describe('createLabelPrinterService', () => {
     stall = false
     await expect(service.printImage(image)).resolves.toBeUndefined()
     expect(working.received.length).toBeGreaterThan(0)
+  })
+
+  /**
+   * The close runs inside the lock and talks to the same handle the job wedged
+   * on — `port.close()` drains pending output, so it can block exactly where
+   * the write did. Unbounded it never settles, so `runExclusive` never reaches
+   * its `finally` and the process-wide lock is held for good.
+   */
+  it('releases the lock even when closing the port never settles', async () => {
+    const working = createFakePrinter()
+    let wedged = true
+    const service = createLabelPrinterService({
+      config: { ...config, jobTimeoutMs: 250, closeTimeoutMs: 20 },
+      openTransport: async () => {
+        if (!wedged) return working.transport
+        return {
+          write: () => new Promise<void>(() => {}),
+          onData: () => {},
+          close: () => new Promise<void>(() => {}),
+        }
+      },
+    })
+    const image = await readFile(assetPath)
+
+    await expect(service.printImage(image)).rejects.toMatchObject({ code: 'printer-timeout' })
+
+    wedged = false
+    await expect(service.printImage(image)).resolves.toBeUndefined()
+    expect(working.received.length).toBeGreaterThan(0)
+  })
+
+  /**
+   * A port that opens after the deadline still holds the device. Leaving it
+   * orphaned turns one 503 into a permanent one, because nothing else can open
+   * the same path.
+   */
+  it('closes a port that finishes opening after the deadline', async () => {
+    const late = createFakePrinter()
+    const service = createLabelPrinterService({
+      config: { ...config, openTimeoutMs: 20 },
+      openTransport: () =>
+        new Promise<SerialTransport>((resolve) => {
+          setTimeout(() => resolve(late.transport), 60)
+        }),
+    })
+
+    await expect(service.printImage(await readFile(assetPath))).rejects.toMatchObject({
+      code: 'printer-unavailable',
+    })
+
+    expect(late.closed).toBe(false)
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    expect(late.closed).toBe(true)
   })
 })
