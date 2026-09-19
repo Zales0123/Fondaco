@@ -2,6 +2,8 @@ import { z } from 'zod'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { makeCrudRoute, type CrudCtx } from '@open-mercato/shared/lib/crud/factory'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { escapeLikePattern } from '@open-mercato/shared/lib/db/escapeLikePattern'
+import { sanitizeSearchTerm } from '@open-mercato/shared/lib/query/sanitizeSearchTerm'
 import { E } from '@/.mercato/generated/entities.ids.generated'
 import {
   GoodsReceipt,
@@ -37,6 +39,55 @@ const F = {
   updated_at: 'updated_at',
 } as const
 
+/** A calendar day filter compared against a day-granular column, anchored at UTC midnight. */
+function toCalendarDay(day: string): Date {
+  return new Date(`${day}T00:00:00.000Z`)
+}
+
+/** Matches nothing, for a search whose answer is "no document", which `$in: []` cannot say. */
+const NO_SUCH_ID = '00000000-0000-0000-0000-000000000000'
+
+/**
+ * Resolves a free-text search to document ids with SQL, rather than handing an `$ilike` to
+ * the query engine.
+ *
+ * The engine reroutes a base-column `like`/`ilike` through `search_tokens` by default, and
+ * its own source says what that costs: tokenization splits on non-alphanumerics and drops
+ * short tokens, so `ZK 1/2026` degrades to {202, 2026} and matches every document from that
+ * year. Goods receipt numbers are full of separators — `PZ/1/2026` is the ordinary shape —
+ * so the one search people rely on most is exactly the one that would break. This keeps the
+ * match literal.
+ *
+ * It repeats the caller's tenant and organization predicates rather than trusting the outer
+ * query to apply them: the ids it returns become an `id IN (...)` filter, and an id the
+ * caller may not see would be a leak however the rest of the query is scoped.
+ */
+async function findGoodsReceiptIdsMatching(term: string, ctx: CrudCtx): Promise<string[]> {
+  const tenantId = ctx.auth?.tenantId ?? null
+  if (!tenantId) return []
+  const scopedOrgIds = resolveScopedOrganizationIds(ctx)
+  if (scopedOrgIds !== null && scopedOrgIds.length === 0) return []
+
+  const pattern = `%${escapeLikePattern(term)}%`
+  const em = ctx.container.resolve<EntityManager>('em')
+  const db = em.getKysely<PzReadDatabase>()
+  let matching = db
+    .selectFrom('pz_goods_receipts')
+    .select('id')
+    .where('tenant_id', '=', tenantId)
+    .where('deleted_at', 'is', null)
+    .where((eb) => eb.or([
+      eb('document_number', 'ilike', pattern),
+      eb('supplier_name', 'ilike', pattern),
+    ]))
+  if (scopedOrgIds !== null) matching = matching.where('organization_id', 'in', scopedOrgIds)
+
+  // Bounded: a search is a way to find a document, not a way to export the table, and the
+  // page the caller asked for is taken from this set afterwards.
+  const rows = await matching.limit(1000).execute()
+  return rows.map((row) => String(row.id))
+}
+
 const routeMetadata = {
   GET: { requireAuth: true, requireFeatures: ['pz.goodsReceipts.view'] },
   POST: { requireAuth: true, requireFeatures: ['pz.goodsReceipts.manage'] },
@@ -56,6 +107,14 @@ const rawBodySchema = z.object({}).passthrough()
  * that can issue the grouped count for exactly the ids the page already resolved.
  */
 type PzReadDatabase = {
+  pz_goods_receipts: {
+    id: string
+    tenant_id: string
+    organization_id: string
+    document_number: string
+    supplier_name: string
+    deleted_at: Date | null
+  }
   pz_goods_receipt_lines: {
     id: string
     goods_receipt_id: string
@@ -185,12 +244,14 @@ export const { metadata, GET, POST, PUT, DELETE } = makeCrudRoute({
       updatedAt: F.updated_at,
     },
     defaultSort: { field: 'documentDate', dir: 'desc' },
-    // Document Date is day-granular, so same-day receipts would otherwise come back in
-    // the database's arbitrary row order and duplicate or skip rows across pages.
-    tiebreakSortField: 'id',
+    // Document Date is day-granular, so same-day receipts would otherwise come back in the
+    // database's arbitrary row order and duplicate or skip rows across pages. Document
+    // Number is the secondary key and is unique within a tenant and organization, so it
+    // settles every tie on its own.
+    tiebreakSortField: 'documentNumber',
     // A freshly created goods receipt has to be in the index it redirects to.
     disableListCache: true,
-    buildFilters: async (query: GoodsReceiptListQuery) => {
+    buildFilters: async (query: GoodsReceiptListQuery, ctx: CrudCtx) => {
       const filters: Record<string, unknown> = {}
       if (query.id) filters[F.id] = query.id
       if (typeof query.ids === 'string' && query.ids.trim().length > 0) {
@@ -200,6 +261,32 @@ export const { metadata, GET, POST, PUT, DELETE } = makeCrudRoute({
           .filter((value) => value.length > 0)
         if (ids.length > 0) filters[F.id] = { $in: ids }
       }
+
+      if (query.status) filters[F.status] = query.status
+      if (query.warehouseId) filters[F.warehouse_id] = query.warehouseId
+
+      // Both ends are inclusive: a user asking for the 3rd to the 5th means three days, and
+      // the column stores a day rather than an instant, so no end-of-day arithmetic applies.
+      const documentDate: Record<string, Date> = {}
+      if (query.documentDateFrom) documentDate.$gte = toCalendarDay(query.documentDateFrom)
+      if (query.documentDateTo) documentDate.$lte = toCalendarDay(query.documentDateTo)
+      if (Object.keys(documentDate).length > 0) filters[F.document_date] = documentDate
+
+      // Free text is one question over two columns — people search for whatever they were
+      // given, a document number or a supplier, without saying which it is.
+      const term = sanitizeSearchTerm(query.search)
+      if (term) {
+        const matched = await findGoodsReceiptIdsMatching(term, ctx)
+        const existing = filters[F.id]
+        // `$in` of the intersection, so a search combined with an explicit id stays an AND.
+        const narrowed = Array.isArray((existing as { $in?: string[] } | undefined)?.$in)
+          ? (existing as { $in: string[] }).$in.filter((id) => matched.includes(id))
+          : typeof existing === 'string'
+            ? (matched.includes(existing) ? [existing] : [])
+            : matched
+        filters[F.id] = narrowed.length > 0 ? { $in: narrowed } : { $eq: NO_SUCH_ID }
+      }
+
       return filters
     },
     transformItem: (item: GoodsReceiptListRow): GoodsReceiptListItem => toGoodsReceiptListItem(item),

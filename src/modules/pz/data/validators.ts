@@ -2,6 +2,18 @@ import { z } from 'zod'
 
 export const goodsReceiptStatusSchema = z.enum(['draft', 'confirmed'])
 
+/**
+ * A calendar day, the same shape the document itself is written in. An empty string is
+ * accepted and dropped, because a cleared date field submits one and clearing a filter is
+ * not an error.
+ */
+const calendarDay = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected a calendar day as YYYY-MM-DD')
+  .refine((value) => !Number.isNaN(Date.parse(`${value}T00:00:00.000Z`)), 'Not a real calendar day')
+
+const optionalCalendarDay = z.union([calendarDay, z.literal('')]).optional()
+
 export const goodsReceiptListSchema = z
   .object({
     id: z.string().uuid().optional(),
@@ -10,6 +22,12 @@ export const goodsReceiptListSchema = z
     pageSize: z.coerce.number().min(1).max(100).default(50),
     sortField: z.string().optional(),
     sortDir: z.enum(['asc', 'desc']).optional(),
+    status: z.union([goodsReceiptStatusSchema, z.literal('')]).optional(),
+    warehouseId: z.union([z.string().uuid(), z.literal('')]).optional(),
+    documentDateFrom: optionalCalendarDay,
+    documentDateTo: optionalCalendarDay,
+    /** Free text, matched against Document Number and Supplier. */
+    search: z.string().optional(),
   })
   .passthrough()
 
