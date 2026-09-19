@@ -117,6 +117,7 @@ const seedProducts: ModuleCli = {
       } catch (err) {
         console.error(err instanceof Error ? err.message : String(err))
         console.error('Usage: mercato catalog_fixtures seed-products [--tenant <id>] [--org <id>]')
+        console.error('Run it where the app reads its storage (docker compose exec app ...).')
         process.exitCode = 1
         return
       }
@@ -129,6 +130,10 @@ const seedProducts: ModuleCli = {
       console.log('🥤 Catalog fixture products:')
       console.log(`   ${summary.created} created, ${summary.skipped} already present`)
       console.log(`   ${summary.images} images attached`)
+      if (summary.images) {
+        console.log('   Image bytes went to this process\'s attachment storage — under the')
+        console.log('   docker dev stack that must be the app container, not the host.')
+      }
       for (const failure of summary.failed) {
         console.log(`   ⚠️  ${failure.handle}: ${failure.reason}`)
       }

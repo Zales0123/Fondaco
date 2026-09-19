@@ -175,6 +175,12 @@ function buildVariantInput(
  * Seeds the beverage products, one default variant each, carrying the real
  * EAN-13 from the packaging. Re-runnable: a fixture whose handle or barcode is
  * already taken in the scope is left untouched rather than duplicated.
+ *
+ * Run this where the app reads its attachment storage. Under the dockerized dev
+ * stack `/app/storage` is a named volume, not the repository, so a run from the
+ * host writes image bytes the app container cannot see: the rows land in the
+ * shared database and every product photo then 500s. Use
+ * `docker compose exec app yarn mercato catalog_fixtures seed-products`.
  */
 export async function seedBeverageProducts(
   em: EntityManager,
