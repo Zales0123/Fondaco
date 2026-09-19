@@ -1,6 +1,6 @@
 # Lessons
 
-This catalog indexes 1 focused lessons without loading their full text. Route the task first, then read only records whose **modules**, standalone-harness **areas**, or **topics** match the work.
+This catalog indexes 4 focused lessons without loading their full text. Route the task first, then read only records whose **modules**, standalone-harness **areas**, or **topics** match the work.
 
 ## How to use this catalog
 
@@ -29,3 +29,15 @@ rg -l '"<area>"|"<module>"|"<topic>"' .ai/lessons/*.md
 ### backend-ui
 
 - [A backend page's sidebar depth follows its URL, not its page group key](lessons/sidebar-depth-follows-the-url-not-the-group-key.md) — area:backend-ui; module:pz,wms; topic:navigation,page-metadata,app-modules
+
+### architecture
+
+- [Sandbox manifests use command arrays and platform data services](lessons/sandbox-manifest-commands.md) — area:architecture; module:platform; topic:sandbox,configuration,startup
+
+### testing
+
+- [A module test under src/ must import its jest globals, or yarn build fails](lessons/module-tests-must-import-jest-globals.md) — area:testing; module:platform; topic:validation-gate,typescript,app-modules
+
+### framework-context
+
+- [PZ counting and confirmation do not post WMS stock](lessons/pz-counting-is-not-stock-posting.md) — area:framework-context; module:pz,warehouseman,wms; topic:receiving,stock-posting,documentation-evidence,transaction-mapping,purchasing,suppliers
