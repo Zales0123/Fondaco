@@ -14,7 +14,7 @@ import { cn } from '@open-mercato/shared/lib/utils'
  */
 
 /** Every tappable control on the panel is at least this tall. */
-export const PANEL_ACTION = 'h-16 w-full text-lg font-semibold md:w-auto md:px-6'
+export const PANEL_ACTION = 'h-20 w-full text-xl font-semibold md:w-auto md:px-8'
 /** The one action a screen exists for, always the last thing on the screen. */
 export const PANEL_PRIMARY = 'h-20 w-full border-2 text-xl font-bold md:w-auto md:px-10'
 
