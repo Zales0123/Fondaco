@@ -38,6 +38,7 @@ export type GoodsReceiptListItem = {
   warehouseSnapshot: GoodsReceiptWarehouseSnapshot | null
   status: GoodsReceiptStatus
   lineCount: number
+  palletCount: number
   /**
    * Only a single-record read carries the lines; a grid page reports `null` rather than an
    * empty array, so "not loaded" and "has no lines" never look the same.
@@ -67,7 +68,7 @@ export function toIsoTimestamp(value: Date | string | null | undefined): string 
 }
 
 function toStatus(value: unknown): GoodsReceiptStatus {
-  return value === 'confirmed' ? 'confirmed' : 'draft'
+  return value === 'confirmed' || value === 'receiving' ? value : 'draft'
 }
 
 function toWarehouseSnapshot(value: unknown): GoodsReceiptWarehouseSnapshot | null {
@@ -103,7 +104,7 @@ export function toGoodsReceiptLineItem(row: GoodsReceiptLineRow): GoodsReceiptLi
 }
 
 /**
- * `lineCount` starts at 0 and is filled by the route's `afterList` hook, so the response
+ * Counts start at 0 and are filled by the route's `afterList` hook, so the response
  * shape is identical whether or not the aggregate could be resolved.
  */
 export function toGoodsReceiptListItem(row: GoodsReceiptListRow): GoodsReceiptListItem {
@@ -116,6 +117,7 @@ export function toGoodsReceiptListItem(row: GoodsReceiptListRow): GoodsReceiptLi
     warehouseSnapshot: toWarehouseSnapshot(row.warehouse_snapshot),
     status: toStatus(row.status),
     lineCount: 0,
+    palletCount: 0,
     lines: null,
     updatedAt: toIsoTimestamp(row.updated_at),
   }

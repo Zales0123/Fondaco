@@ -41,6 +41,7 @@ describe('toGoodsReceiptListItem', () => {
       warehouseSnapshot: null,
       status: 'draft',
       lineCount: 0,
+      palletCount: 0,
       lines: null,
       updatedAt: '2026-01-31T10:15:00.000Z',
     })
@@ -54,9 +55,14 @@ describe('toGoodsReceiptListItem', () => {
     expect(toGoodsReceiptListItem(row()).updatedAt).toBe('2026-01-31T10:15:00.000Z')
   })
 
-  it('narrows an unexpected status to draft instead of trusting the column', () => {
+  it('preserves receiving and narrows an unexpected status to draft', () => {
     expect(toGoodsReceiptListItem(row({ status: 'whatever' })).status).toBe('draft')
+    expect(toGoodsReceiptListItem(row({ status: 'receiving' })).status).toBe('receiving')
     expect(toGoodsReceiptListItem(row({ status: 'confirmed' })).status).toBe('confirmed')
+  })
+
+  it('starts the pallet count at zero for the route to fill from its grouped query', () => {
+    expect(toGoodsReceiptListItem(row()).palletCount).toBe(0)
   })
 
   it('drops a warehouse snapshot that does not carry both name and code', () => {
