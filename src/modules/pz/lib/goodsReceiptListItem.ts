@@ -3,6 +3,8 @@ import type {
   GoodsReceiptStatus,
   GoodsReceiptUomSnapshot,
   GoodsReceiptWarehouseSnapshot,
+  StockPostingFailureReason,
+  StockPostingStatus,
 } from '../data/entities'
 
 export type GoodsReceiptLineItem = {
@@ -25,6 +27,10 @@ export type GoodsReceiptListRow = {
   warehouse_id: string
   warehouse_snapshot: GoodsReceiptWarehouseSnapshot | null
   status: string
+  stock_posting_status: string | null
+  stock_posted_at: Date | string | null
+  stock_posting_error: string | null
+  stock_posting_location_id: string | null
   updated_at: Date | string | null
 }
 
@@ -37,6 +43,13 @@ export type GoodsReceiptListItem = {
   warehouseId: string
   warehouseSnapshot: GoodsReceiptWarehouseSnapshot | null
   status: GoodsReceiptStatus
+  /** What became of putting this document's counted goods into stock (ADR-0011). */
+  stockPosting: {
+    status: StockPostingStatus
+    postedAt: string | null
+    reason: StockPostingFailureReason | null
+    locationId: string | null
+  }
   lineCount: number
   palletCount: number
   /**
@@ -69,6 +82,26 @@ export function toIsoTimestamp(value: Date | string | null | undefined): string 
 
 function toStatus(value: unknown): GoodsReceiptStatus {
   return value === 'confirmed' || value === 'receiving' ? value : 'draft'
+}
+
+const STOCK_POSTING_STATUSES: readonly StockPostingStatus[] = ['not_applicable', 'pending', 'posted', 'failed']
+
+function toStockPostingStatus(value: unknown): StockPostingStatus {
+  return STOCK_POSTING_STATUSES.includes(value as StockPostingStatus)
+    ? (value as StockPostingStatus)
+    : 'not_applicable'
+}
+
+const STOCK_POSTING_REASONS: readonly StockPostingFailureReason[] = [
+  'destination_unusable',
+  'variant_tracking_required',
+  'posting_rejected',
+]
+
+function toStockPostingReason(value: unknown): StockPostingFailureReason | null {
+  return STOCK_POSTING_REASONS.includes(value as StockPostingFailureReason)
+    ? (value as StockPostingFailureReason)
+    : null
 }
 
 function toWarehouseSnapshot(value: unknown): GoodsReceiptWarehouseSnapshot | null {
@@ -116,6 +149,12 @@ export function toGoodsReceiptListItem(row: GoodsReceiptListRow): GoodsReceiptLi
     warehouseId: String(row.warehouse_id),
     warehouseSnapshot: toWarehouseSnapshot(row.warehouse_snapshot),
     status: toStatus(row.status),
+    stockPosting: {
+      status: toStockPostingStatus(row.stock_posting_status),
+      postedAt: toIsoTimestamp(row.stock_posted_at),
+      reason: toStockPostingReason(row.stock_posting_error),
+      locationId: row.stock_posting_location_id ?? null,
+    },
     lineCount: 0,
     palletCount: 0,
     lines: null,

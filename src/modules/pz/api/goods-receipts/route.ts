@@ -35,6 +35,10 @@ const F = {
   warehouse_id: 'warehouse_id',
   warehouse_snapshot: 'warehouse_snapshot',
   status: 'status',
+  stock_posting_status: 'stock_posting_status',
+  stock_posted_at: 'stock_posted_at',
+  stock_posting_error: 'stock_posting_error',
+  stock_posting_location_id: 'stock_posting_location_id',
   created_at: 'created_at',
   updated_at: 'updated_at',
 } as const
@@ -250,6 +254,10 @@ export const { metadata, GET, POST, PUT, DELETE } = makeCrudRoute({
       F.warehouse_id,
       F.warehouse_snapshot,
       F.status,
+      F.stock_posting_status,
+      F.stock_posted_at,
+      F.stock_posting_error,
+      F.stock_posting_location_id,
       F.created_at,
       F.updated_at,
     ],
@@ -280,6 +288,7 @@ export const { metadata, GET, POST, PUT, DELETE } = makeCrudRoute({
       }
 
       if (query.status) filters[F.status] = query.status
+      if (query.stockPostingStatus) filters[F.stock_posting_status] = query.stockPostingStatus
       if (query.warehouseId) filters[F.warehouse_id] = query.warehouseId
 
       // Both ends are inclusive: a user asking for the 3rd to the 5th means three days, and

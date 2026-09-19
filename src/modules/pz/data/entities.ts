@@ -1,4 +1,4 @@
-import { Collection } from '@mikro-orm/core'
+import { Collection, OptionalProps } from '@mikro-orm/core'
 import {
   Entity,
   Index,
@@ -17,6 +17,25 @@ export type GoodsReceiptStatus = 'draft' | 'receiving' | 'confirmed'
 
 /** A released document is frozen for the same reasons a confirmed one is, so both refuse edits. */
 export const FROZEN_GOODS_RECEIPT_STATUSES: readonly GoodsReceiptStatus[] = ['receiving', 'confirmed']
+
+/**
+ * What became of the attempt to post this document's counted goods into `wms` stock.
+ *
+ * `not_applicable` is what a document confirmed while the posting toggle was off records —
+ * it is not a failure and never becomes one. The rest is the lifecycle of one attempt:
+ * `pending` from confirmation until the subscriber runs, then `posted` or `failed`.
+ */
+export type StockPostingStatus = 'not_applicable' | 'pending' | 'posted' | 'failed'
+
+/**
+ * Why a posting failed, as a stable code rather than an exception message: the office reads
+ * this, so it is translated at render time, and a raw `wms` error could carry internals a
+ * warehouse screen has no business showing.
+ */
+export type StockPostingFailureReason =
+  | 'destination_unusable'
+  | 'variant_tracking_required'
+  | 'posting_rejected'
 
 export type PalletStatus = 'open' | 'closed'
 
@@ -61,6 +80,11 @@ export type GoodsReceiptUomSnapshot = {
   name: 'pz_goods_receipts_scope_warehouse_idx',
   properties: ['tenantId', 'organizationId', 'warehouseId'],
 })
+/** The panel and the office both list the documents whose stock posting needs attention. */
+@Index({
+  name: 'pz_goods_receipts_scope_posting_status_idx',
+  properties: ['tenantId', 'organizationId', 'stockPostingStatus'],
+})
 /**
  * Document Numbers are typed by hand, so uniqueness is a data rule rather than a
  * generator invariant. The index is per `(tenant, organization)` so one Organization's
@@ -74,6 +98,9 @@ export type GoodsReceiptUomSnapshot = {
     'create unique index "pz_goods_receipts_document_number_unique_idx" on "pz_goods_receipts" ("tenant_id", "organization_id", lower("document_number")) where deleted_at is null',
 })
 export class GoodsReceipt {
+  /** Defaulted by the column, so creating a draft says nothing about a posting that cannot exist yet. */
+  [OptionalProps]?: 'stockPostingStatus'
+
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
 
@@ -104,6 +131,36 @@ export class GoodsReceipt {
 
   @Property({ type: 'text', default: 'draft' })
   status: GoodsReceiptStatus = 'draft'
+
+  /**
+   * `auth:user` id of whoever confirmed, and when. Scalar by contract, and stored because the
+   * stock movement `wms` records has to name a person: the posting runs after the request
+   * that confirmed has ended, so there is no actor left to ask by then.
+   */
+  @Property({ name: 'confirmed_by', type: 'uuid', nullable: true })
+  confirmedBy?: string | null
+
+  @Property({ name: 'confirmed_at', type: Date, nullable: true })
+  confirmedAt?: Date | null
+
+  @Property({ name: 'stock_posting_status', type: 'text', default: 'not_applicable' })
+  stockPostingStatus: StockPostingStatus = 'not_applicable'
+
+  @Property({ name: 'stock_posted_at', type: Date, nullable: true })
+  stockPostedAt?: Date | null
+
+  /**
+   * The `wms:warehouse_location` the counted goods are posted into, pinned at confirmation.
+   * It is not re-read from the warehouse's configured Default Destination at posting time:
+   * the location is part of the movement idempotency key, so a setting changed between the
+   * first attempt and a retry would make the retry post a second movement instead of
+   * replaying the first (ADR-0011).
+   */
+  @Property({ name: 'stock_posting_location_id', type: 'uuid', nullable: true })
+  stockPostingLocationId?: string | null
+
+  @Property({ name: 'stock_posting_error', type: 'text', nullable: true })
+  stockPostingError?: StockPostingFailureReason | null
 
   @OneToMany(() => GoodsReceiptLine, (line) => line.goodsReceipt)
   lines = new Collection<GoodsReceiptLine>(this)

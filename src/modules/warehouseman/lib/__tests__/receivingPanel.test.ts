@@ -1,5 +1,6 @@
 import { describe, expect, it } from '@jest/globals'
 import {
+  buildFailedPostingsQuery,
   buildReceivingListQuery,
   describePalletLookupFailure,
   adjustScanQuantity,
@@ -24,6 +25,25 @@ describe('receiving hrefs', () => {
 
   it('escapes ids so a stray separator cannot forge a path', () => {
     expect(receivingReceiptHref('a/b')).toBe('/warehouseman/receiving/a%2Fb')
+  })
+})
+
+describe('buildFailedPostingsQuery', () => {
+  it('asks only for the confirmed documents whose stock posting failed', () => {
+    expect(buildFailedPostingsQuery(null)).toEqual({
+      status: 'confirmed',
+      stockPostingStatus: 'failed',
+      pageSize: '20',
+    })
+  })
+
+  it('narrows to a warehouse when one is chosen, like the document list does', () => {
+    expect(buildFailedPostingsQuery('wh-1')).toEqual({
+      status: 'confirmed',
+      stockPostingStatus: 'failed',
+      pageSize: '20',
+      warehouseId: 'wh-1',
+    })
   })
 })
 

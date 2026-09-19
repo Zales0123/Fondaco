@@ -9,11 +9,18 @@ import {
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { createLogger } from '@open-mercato/shared/lib/logger'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import type { AwilixContainer } from 'awilix'
+import type { QueryEngine } from '@open-mercato/shared/lib/query/types'
 import type {
   GoodsReceiptCatalogSnapshot,
+  GoodsReceiptStatus,
   PalletLineCatalogSnapshot,
   PalletStatus,
+  StockPostingFailureReason,
+  StockPostingStatus,
 } from '../../../data/entities'
+import { assessConfirmation } from '../../../lib/receivingConfirmation'
+import type { ConfirmationBlocker } from '../../../lib/stockPosting'
 import {
   buildReceivingSummary,
   type ReceivingSummary,
@@ -52,12 +59,50 @@ const summaryRowSchema = z.object({
   pallets: z.array(palletBreakdownSchema),
 })
 
+const unitTotalSchema = z.object({
+  unit: z.string().nullable(),
+  expected: z.string(),
+  counted: z.string(),
+})
+
+/**
+ * Why the delivery cannot be finished yet, as codes the screen translates. They are advisory:
+ * the confirm command evaluates the same rules again at write time, because this answer can
+ * be minutes old by the time somebody presses the button.
+ */
+const blockerSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('notReceiving') }),
+  z.object({ kind: z.literal('palletsOpen'), count: z.number().int() }),
+  z.object({ kind: z.literal('noLines') }),
+  z.object({ kind: z.literal('noEligibleDestination') }),
+  z.object({ kind: z.literal('destinationRequired') }),
+  z.object({ kind: z.literal('destinationInvalid') }),
+  z.object({ kind: z.literal('trackedVariants'), products: z.array(z.string()) }),
+])
+
+const stockPostingSchema = z.object({
+  status: z.enum(['not_applicable', 'pending', 'posted', 'failed']),
+  postedAt: z.string().nullable(),
+  reason: z.string().nullable(),
+  locationId: z.string().uuid().nullable(),
+  /** Whether posting is switched on at all; with it off no destination is asked for. */
+  enabled: z.boolean(),
+})
+
 const summaryResponseSchema = z.object({
   items: z.array(summaryRowSchema),
+  /** @deprecated Sums across units; read `totalsByUnit`. Kept as a published response field. */
   totals: z.object({ expected: z.string(), counted: z.string() }),
+  totalsByUnit: z.array(unitTotalSchema),
   palletCount: z.number().int(),
   palletsOpen: z.number().int(),
   palletsClosed: z.number().int(),
+  status: z.enum(['draft', 'receiving', 'confirmed']),
+  /** The version a completion must send in its optimistic-lock header. */
+  updatedAt: z.string().nullable(),
+  blockers: z.array(blockerSchema),
+  defaultDestinationId: z.string().uuid().nullable(),
+  stockPosting: stockPostingSchema,
 })
 
 const errorSchema = z.object({ error: z.string() }).passthrough()
@@ -67,6 +112,13 @@ type ReceivingSummaryDatabase = {
     id: string
     tenant_id: string
     organization_id: string
+    status: GoodsReceiptStatus
+    warehouse_id: string
+    updated_at: Date | null
+    stock_posting_status: StockPostingStatus
+    stock_posted_at: Date | null
+    stock_posting_location_id: string | null
+    stock_posting_error: StockPostingFailureReason | null
     deleted_at: Date | null
   }
   pz_goods_receipt_lines: {
@@ -120,16 +172,18 @@ type ScopedRead = {
  * id: a foreign key does not constrain a line's scope to its header's, and a pallet the
  * caller may not see would be a leak however the receipt itself was resolved.
  */
-async function receiptIsVisible(read: ScopedRead, goodsReceiptId: string): Promise<boolean> {
+type ReceiptHeader = ReceivingSummaryDatabase['pz_goods_receipts']
+
+async function loadReceiptHeader(read: ScopedRead, goodsReceiptId: string): Promise<ReceiptHeader | null> {
   let query = read.em
     .getKysely<ReceivingSummaryDatabase>()
     .selectFrom('pz_goods_receipts')
-    .select('id')
+    .selectAll()
     .where('id', '=', goodsReceiptId)
     .where('tenant_id', '=', read.tenantId)
     .where('deleted_at', 'is', null)
   if (read.organizationIds !== null) query = query.where('organization_id', 'in', read.organizationIds)
-  return Boolean(await query.executeTakeFirst())
+  return (await query.executeTakeFirst()) ?? null
 }
 
 async function loadExpectedLines(read: ScopedRead, goodsReceiptId: string): Promise<ReceivingSummaryExpectedLine[]> {
@@ -187,13 +241,83 @@ async function loadPalletLines(
   }))
 }
 
-async function loadSummary(read: ScopedRead, goodsReceiptId: string): Promise<ReceivingSummary | null> {
-  if (!(await receiptIsVisible(read, goodsReceiptId))) return null
+type SummaryPayload = ReceivingSummary & {
+  status: GoodsReceiptStatus
+  updatedAt: string | null
+  blockers: ConfirmationBlocker[]
+  defaultDestinationId: string | null
+  stockPosting: {
+    status: StockPostingStatus
+    postedAt: string | null
+    reason: StockPostingFailureReason | null
+    locationId: string | null
+    enabled: boolean
+  }
+}
+
+/**
+ * The comparison plus everything the completion button depends on, in one answer: a screen
+ * that asked for them separately could render a button against one document's state and a
+ * summary against another's.
+ *
+ * The assessment runs in the document's own organization rather than the caller's selection,
+ * which may span several — the header above already proved the caller may read this one.
+ */
+async function loadSummary(
+  read: ScopedRead,
+  container: AwilixContainer,
+  goodsReceiptId: string,
+): Promise<SummaryPayload | null> {
+  const header = await loadReceiptHeader(read, goodsReceiptId)
+  if (!header) return null
+
   const [expectedLines, pallets] = await Promise.all([
     loadExpectedLines(read, goodsReceiptId),
     loadPallets(read, goodsReceiptId),
   ])
-  return buildReceivingSummary({ expectedLines, pallets, palletLines: await loadPalletLines(read, pallets) })
+  const summary = buildReceivingSummary({
+    expectedLines,
+    pallets,
+    palletLines: await loadPalletLines(read, pallets),
+  })
+
+  const scope = { tenantId: String(header.tenant_id), organizationId: String(header.organization_id) }
+  const assessment = await assessConfirmation(
+    {
+      em: read.em.fork(),
+      queryEngine: container.resolve('queryEngine') as QueryEngine,
+      resolve: (name) => container.resolve(name),
+    },
+    scope,
+    {
+      id: goodsReceiptId,
+      status: header.status,
+      warehouseId: String(header.warehouse_id),
+      lineCount: expectedLines.length,
+    },
+    null,
+  )
+
+  return {
+    ...summary,
+    status: header.status,
+    updatedAt: toIsoOrNull(header.updated_at),
+    blockers: assessment.blockers,
+    defaultDestinationId: assessment.defaultDestinationId,
+    stockPosting: {
+      status: header.stock_posting_status,
+      postedAt: toIsoOrNull(header.stock_posted_at),
+      reason: header.stock_posting_error,
+      locationId: header.stock_posting_location_id,
+      enabled: assessment.postingEnabled,
+    },
+  }
+}
+
+function toIsoOrNull(value: Date | string | null): string | null {
+  if (value == null) return null
+  const parsed = value instanceof Date ? value : new Date(value)
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString()
 }
 
 export async function GET(request: Request) {
@@ -231,6 +355,7 @@ export async function GET(request: Request) {
         tenantId: scope.tenantId ?? auth.tenantId,
         organizationIds: resolveScopedOrganizationIds(scope),
       },
+      container,
       parsed.data.id,
     )
     if (!summary) {
@@ -256,7 +381,7 @@ export const openApi: OpenApiRouteDoc = {
     GET: {
       summary: 'Compare expected against counted quantities',
       description:
-        'Returns, per catalog variant, the quantity the goods receipt expected against the quantity counted across every one of its pallets, with the per-pallet breakdown. A variant no line expected is reported as a surplus row with a null expected quantity. Quantities are decimal strings at the storage precision, because a JSON number cannot carry numeric(18,4) faithfully. Rows come back worst first: shortages by absolute difference descending, then surplus rows, then over-counts, then matching rows. The endpoint is read-only and scoped to the authenticated tenant and organization.',
+        'Returns, per catalog variant, the quantity the goods receipt expected against the quantity counted across every one of its pallets, with the per-pallet breakdown. A variant no line expected is reported as a surplus row with a null expected quantity. Quantities are decimal strings at the storage precision, because a JSON number cannot carry numeric(18,4) faithfully. Rows come back worst first: shortages by absolute difference descending, then surplus rows, then over-counts, then matching rows. Totals are reported per unit; the flat `totals` object sums across units and is kept only for compatibility. The response also carries what a completion depends on: the document status, the version to send in the optimistic-lock header, the reasons the delivery cannot be finished yet, the warehouse preselected destination, and the state of its stock posting. The endpoint is read-only and scoped to the authenticated tenant and organization.',
       tags: ['Goods Receipts'],
       query: summaryQuerySchema,
       responses: [{ status: 200, description: 'The receiving summary.', schema: summaryResponseSchema }],

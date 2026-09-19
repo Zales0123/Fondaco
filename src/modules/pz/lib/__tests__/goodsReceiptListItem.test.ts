@@ -14,6 +14,10 @@ function row(overrides: Partial<GoodsReceiptListRow> = {}): GoodsReceiptListRow 
     warehouse_id: '22222222-2222-4222-8222-222222222222',
     warehouse_snapshot: null,
     status: 'draft',
+    stock_posting_status: null,
+    stock_posted_at: null,
+    stock_posting_error: null,
+    stock_posting_location_id: null,
     updated_at: '2026-01-31T10:15:00.000Z',
     ...overrides,
   }
@@ -40,6 +44,7 @@ describe('toGoodsReceiptListItem', () => {
       warehouseId: '22222222-2222-4222-8222-222222222222',
       warehouseSnapshot: null,
       status: 'draft',
+      stockPosting: { status: 'not_applicable', postedAt: null, reason: null, locationId: null },
       lineCount: 0,
       palletCount: 0,
       lines: null,
@@ -63,6 +68,29 @@ describe('toGoodsReceiptListItem', () => {
 
   it('starts the pallet count at zero for the route to fill from its grouped query', () => {
     expect(toGoodsReceiptListItem(row()).palletCount).toBe(0)
+  })
+
+  it('reports the stock posting, narrowing a status or reason it does not know to a safe one', () => {
+    expect(
+      toGoodsReceiptListItem(
+        row({
+          stock_posting_status: 'failed',
+          stock_posting_error: 'destination_unusable',
+          stock_posting_location_id: '33333333-3333-4333-8333-333333333333',
+          stock_posted_at: null,
+        }),
+      ).stockPosting,
+    ).toEqual({
+      status: 'failed',
+      postedAt: null,
+      reason: 'destination_unusable',
+      locationId: '33333333-3333-4333-8333-333333333333',
+    })
+    const unknown = toGoodsReceiptListItem(
+      row({ stock_posting_status: 'whatever', stock_posting_error: 'whatever' }),
+    ).stockPosting
+    expect(unknown.status).toBe('not_applicable')
+    expect(unknown.reason).toBeNull()
   })
 
   it('drops a warehouse snapshot that does not carry both name and code', () => {

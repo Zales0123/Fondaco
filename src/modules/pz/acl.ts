@@ -36,6 +36,19 @@ export const features = [
     dependsOn: ['pz.goodsReceipts.view'],
   },
   {
+    /**
+     * The floor's own way to finish a delivery: it confirms the document and starts the
+     * Stock Posting, and it is granted separately from the office's confirm because
+     * "the count is done" and "the paperwork is final" are different people's jobs
+     * (ADR-0011). Counting is the prerequisite — finishing a delivery nobody was
+     * permitted to count is not a job that exists.
+     */
+    id: 'pz.receiving.confirm',
+    title: 'Confirm deliveries from the floor',
+    module: 'pz',
+    dependsOn: ['pz.receiving.count'],
+  },
+  {
     id: 'pz.goodsReceipts.confirm',
     title: 'Confirm goods receipts',
     module: 'pz',

@@ -34,9 +34,10 @@ _Avoid_: Placeholder, mock, dummy page
 
 **Goods Receipt**:
 A warehouse document recording a delivery that arrived from outside the organization.
-Users know it by its Polish name, _Przyjęcie Zewnętrzne_ (PZ); code and identifiers use
-the English term.
-_Avoid_: Delivery, intake, GRN, inbound, receipt (bare)
+Users know it as a _Zlecenie Przyjęcia Zewnętrznego_ (ZPZ) — an order to receive, not the
+receiving itself — and its numbers carry that prefix. Code and identifiers keep the English
+term and the `pz` module id.
+_Avoid_: Delivery, intake, GRN, inbound, receipt (bare), Przyjęcie Zewnętrzne (PZ)
 
 **Line**:
 A single product and quantity on a Goods Receipt. Two Lines may name the same product;
@@ -60,9 +61,10 @@ _Avoid_: Receipt date, delivery date, entry date
 
 **Confirm**:
 The one-way act of finalizing a Goods Receipt, after which it can no longer be changed.
-Confirming records that the floor counted the delivery and the count is final; it does not
-move stock.
-_Avoid_: Post, approve, submit, finalize, close
+Confirming records that the floor counted the delivery and the count is final, and it starts
+the Stock Posting. It is one act whoever performs it: the floor confirms from the Panel and the
+office from the document, and both are refused by the same rules.
+_Avoid_: Post, approve, submit, finalize, close, complete
 
 **Draft**:
 A Goods Receipt that has been entered but not yet confirmed. The only state in which it
@@ -98,3 +100,24 @@ _Avoid_: Finish, complete, seal, lock
 **Surplus**:
 A product counted on a Pallet that no Line of the Goods Receipt expected.
 _Avoid_: Extra, overdelivery, unexpected item, nadwyzka
+
+## Stock
+
+**Stock Posting**:
+Putting a confirmed Goods Receipt's counted goods into warehouse stock. It is an effect of
+Confirm, not an act of its own: it happens afterwards and can still be pending or have failed
+while the document is already final. One posting per product, whatever number of Pallets it
+arrived on.
+_Avoid_: Posting to stock, booking, goods-in posting, receipt posting
+
+**Destination**:
+The single Warehouse Location a Goods Receipt's counted goods are posted into. Chosen when the
+document is confirmed and fixed from then on, because moving it afterwards would post the same
+goods twice.
+_Avoid_: Target, putaway location, receiving location, bin
+
+**Default Destination**:
+The Destination preselected for a Warehouse. A convenience, never a constraint: whoever confirms
+may pick another Location, and a Warehouse without one asks for a choice rather than refusing the
+document.
+_Avoid_: Receiving location, staging location, home bin
