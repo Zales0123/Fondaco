@@ -186,6 +186,22 @@ async function pickTodayByKeyboard(page: Page): Promise<void> {
 }
 
 
+/** Reads the undo handle the CRUD factory attaches to every command-backed write. */
+function readOperation(response: { headers: () => Record<string, string> }): { id: string; undoToken: string } {
+  const raw = response.headers()['x-om-operation']
+  expect(raw, 'the write did not report an operation to undo').toBeTruthy()
+  const parsed = JSON.parse(decodeURIComponent(raw.replace(/^omop:/, ''))) as { id: string; undoToken: string }
+  expect(parsed.undoToken).toBeTruthy()
+  return parsed
+}
+
+async function listById(request: APIRequestContext, id: string): Promise<GoodsReceiptRow[]> {
+  const response = await request.get(`${API}?ids=${encodeURIComponent(id)}&pageSize=1`)
+  expect(response.status()).toBe(200)
+  return ((await response.json()) as { items: GoodsReceiptRow[] }).items
+}
+
+
 test.describe('TC-PZ-002 create a goods receipt', () => {
   let warehouseId: string
   let productAId: string
@@ -360,6 +376,58 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
     expect(reused.status(), await reused.text()).toBe(201)
   })
 
+
+  /**
+   * Undo and redo are framework contracts every command has to honour, and a goods receipt
+   * is an aggregate: putting it back means the same header AND the same lines, under the
+   * ids the document already had. A redo that minted new ids would leave the original
+   * lines pointing at a row nobody can reach.
+   */
+  test('undo removes the whole document and redo restores it under its original ids', async ({ context }) => {
+    await login(context.request, ADMIN.email, ADMIN.password)
+    const documentNumber = `PZ/${RUN}/9`
+
+    const created = await context.request.post(API, {
+      data: {
+        documentNumber,
+        documentDate: yesterday(),
+        supplierName: 'Hurtownia Kowalski',
+        warehouseId,
+        lines: [
+          { catalogProductId: productAId, quantity: '2' },
+          { catalogProductId: productBId, quantity: '3', unit: 'kg' },
+        ],
+      },
+      failOnStatusCode: false,
+    })
+    expect(created.status(), await created.text()).toBe(201)
+    const operation = readOperation(created)
+    const receiptId = ((await created.json()) as Created).id as string
+    const before = await readGoodsReceipt(context.request, receiptId)
+    expect(before.lines).toHaveLength(2)
+
+    const undone = await context.request.post('/api/audit_logs/audit-logs/actions/undo', {
+      data: { undoToken: operation.undoToken },
+      failOnStatusCode: false,
+    })
+    expect(undone.status(), await undone.text()).toBe(200)
+    expect(await listById(context.request, receiptId)).toHaveLength(0)
+
+    const redone = await context.request.post('/api/audit_logs/audit-logs/actions/redo', {
+      data: { logId: operation.id },
+      failOnStatusCode: false,
+    })
+    expect(redone.status(), await redone.text()).toBe(200)
+
+    const after = await readGoodsReceipt(context.request, receiptId)
+    expect(after.id).toBe(before.id)
+    expect(after.documentNumber).toBe(documentNumber)
+    expect(after.status).toBe('draft')
+    expect(after.lines?.map((line) => line.id)).toEqual(before.lines?.map((line) => line.id))
+    expect(after.lines?.map((line) => line.quantity)).toEqual(['2.0000', '3.0000'])
+    expect(after.lines?.map((line) => line.unit)).toEqual(['pc', 'kg'])
+    expect(after.lines?.map((line) => line.catalogVariantId)).toEqual([variantAId, variantBId])
+  })
 
   /**
    * The whole create flow without a mouse, ending in a real document. Focus is taken once,
