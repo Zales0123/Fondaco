@@ -110,6 +110,7 @@
     "@xyflow/react": "^12.11.1",
     "ai": "^7.0.83",
     "awilix": "^13.0.5",
+    "barcode-detector": "^3.2.2",
     "bcryptjs": "^3.0.3",
     "bwip-js": "^4.11.4",
     "class-variance-authority": "^0.7.1",
