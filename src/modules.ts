@@ -30,6 +30,10 @@ export const enabledModules: ModuleEntry[] = [
   // (it sets none). Must come after `catalog` so the variants exist.
   { id: 'catalog_fixtures', from: '@app' },
   { id: 'barcode_scanner', from: '@app' },
+  // Demo goods receipts for the pz receiving flow. CLI-only on purpose: `pz` declares no
+  // seedExamples so a demo delivery never lands in the real document series, and this
+  // module keeps that property rather than overriding the decision.
+  { id: 'pz_fixtures', from: '@app' },
   // Demo warehouse/inventory data for the installed wms module (see
   // src/modules/wms_fixtures). Seeds on `mercato init` unless --no-examples.
   // Keep last: setup hooks run in this list's order, and the fixtures depend on
