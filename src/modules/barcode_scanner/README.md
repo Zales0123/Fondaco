@@ -1,8 +1,11 @@
 # barcode_scanner
 
 Camera barcode scanning for the admin panel. Adds **Catalog → Scan barcode**
-(`/backend/catalog/scan`): scan a product barcode, land on the matching
-variant's edit form.
+(`/backend/catalog/scan`): scan a product barcode, land on the edit form of the
+product that owns it.
+
+A barcode identifies a *variant*, so the lookup matches variants — but the
+destination is that variant's **product**.
 
 ## How it works
 
@@ -14,9 +17,13 @@ variant's edit form.
    the caller's tenant and organization. **This module owns no API route and no
    entity** — it adds a page and a component, nothing else.
 3. Match resolution: a single exact `barcode` hit, else a single exact `sku`
-   hit, else a single result overall. Several candidates render a chooser; none
-   renders an empty state. On a match the page navigates to
-   `/backend/catalog/products/<productId>/variants/<variantId>`.
+   hit, else a single result overall. If several variants match but they all
+   belong to the **same** product, that is not ambiguous — the destination is
+   the product, so it navigates anyway. Only candidates spanning different
+   products render a chooser; no match renders an empty state.
+4. On a match the page navigates to `/backend/catalog/products/<productId>`.
+   A variant with no `product_id` cannot be opened and surfaces an error
+   instead of navigating.
 
 The page requires `catalog.products.view`, matching what the API enforces.
 

@@ -67,10 +67,8 @@ export default function BarcodeScanPage() {
   const [state, setState] = React.useState<LookupState>({ kind: 'idle' })
   const inFlightRef = React.useRef(false)
 
-  const variantHref = React.useCallback(
-    (productId: string, variantId: string) => `/backend/catalog/products/${productId}/variants/${variantId}`,
-    [],
-  )
+  // The barcode identifies a variant, but the destination is its product.
+  const productHref = React.useCallback((productId: string) => `/backend/catalog/products/${productId}`, [])
 
   const openScanner = React.useCallback(() => {
     setState({ kind: 'idle' })
@@ -81,7 +79,7 @@ export default function BarcodeScanPage() {
     setDialogOpen(false)
   }, [])
 
-  const openVariant = React.useCallback(
+  const openProduct = React.useCallback(
     (variant: VariantListItem, code: string) => {
       const productId = typeof variant.product_id === 'string' ? variant.product_id.trim() : ''
       if (!productId) {
@@ -97,9 +95,9 @@ export default function BarcodeScanPage() {
       }
       setState({ kind: 'navigating', code })
       setDialogOpen(false)
-      router.push(variantHref(productId, variant.id))
+      router.push(productHref(productId))
     },
-    [router, t, variantHref],
+    [router, t, productHref],
   )
 
   const handleDetected = React.useCallback(
@@ -122,10 +120,19 @@ export default function BarcodeScanPage() {
           const items = Array.isArray(response.items) ? response.items : []
           const match = resolveMatch(items, trimmed)
           if (match) {
-            openVariant(match, trimmed)
+            openProduct(match, trimmed)
             return
           }
           if (items.length > 1) {
+            // Several variants matched, but the destination is the product — so
+            // if they all belong to one product there is nothing to disambiguate.
+            const productIds = items.map((item) =>
+              typeof item.product_id === 'string' ? item.product_id.trim() : '',
+            )
+            if (productIds[0] && new Set(productIds).size === 1) {
+              openProduct(items[0], trimmed)
+              return
+            }
             setState({ kind: 'multiple', code: trimmed, candidates: items })
             setDialogOpen(false)
             return
@@ -141,7 +148,7 @@ export default function BarcodeScanPage() {
         }
       })()
     },
-    [openVariant, t],
+    [openProduct, t],
   )
 
   const busy = state.kind === 'searching' || state.kind === 'navigating'
@@ -149,7 +156,7 @@ export default function BarcodeScanPage() {
     state.kind === 'searching'
       ? t('barcodeScanner.status.searching', 'Looking up {code}…', { code: state.code })
       : state.kind === 'navigating'
-        ? t('barcodeScanner.status.redirecting', 'Match found — opening the variant…')
+        ? t('barcodeScanner.status.redirecting', 'Match found — opening the product…')
         : null
   const errorMessage = state.kind === 'error' ? state.message : null
 
@@ -162,7 +169,7 @@ export default function BarcodeScanPage() {
         title={t('barcodeScanner.page.title', 'Scan barcode')}
         description={t(
           'barcodeScanner.page.description',
-          'Scan a product barcode with your camera and jump straight to the matching variant.',
+          'Scan a product barcode with your camera and jump straight to its product.',
         )}
         actions={
           <Button type="button" size="lg" onClick={openScanner} disabled={busy}>
@@ -179,7 +186,7 @@ export default function BarcodeScanPage() {
               <CardDescription>
                 {t(
                   'barcodeScanner.idle.description',
-                  'Press “Scan barcode” to open the camera. A single matching variant opens automatically.',
+                  'Press “Scan barcode” to open the camera. A single match opens its product automatically.',
                 )}
               </CardDescription>
             </CardHeader>
@@ -219,7 +226,7 @@ export default function BarcodeScanPage() {
           <EmptyState
             variant="subtle"
             icon={<ScanLine className="size-6" aria-hidden="true" />}
-            title={t('barcodeScanner.empty.title', 'No variant matches this barcode')}
+            title={t('barcodeScanner.empty.title', 'No product matches this barcode')}
             description={t(
               'barcodeScanner.empty.description',
               'Nothing in the catalog matches {code}. Check the code and scan again.',
@@ -241,7 +248,7 @@ export default function BarcodeScanPage() {
               <CardDescription>
                 {t(
                   'barcodeScanner.multiple.description',
-                  '{count} variants match {code}. Pick the right one to open it.',
+                  '{count} variants match {code}. Pick one to open its product.',
                   { count: state.candidates.length, code: state.code },
                 )}
               </CardDescription>
@@ -258,8 +265,8 @@ export default function BarcodeScanPage() {
                         type="button"
                         variant="outline"
                         className="h-auto w-full justify-start px-4 py-3 text-left"
-                        aria-label={t('barcodeScanner.chooser.openAria', 'Open variant {name}', { name })}
-                        onClick={() => openVariant(candidate, state.code)}
+                        aria-label={t('barcodeScanner.chooser.openAria', 'Open product for {name}', { name })}
+                        onClick={() => openProduct(candidate, state.code)}
                       >
                         <span className="flex min-w-0 flex-col gap-1">
                           <span className="truncate text-sm font-medium">{name}</span>

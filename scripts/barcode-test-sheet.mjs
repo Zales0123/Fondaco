@@ -79,7 +79,7 @@ for (const row of rows) {
       <p class="code">${escapeHtml(row.barcode)}</p>
       <p class="name">${escapeHtml(row.product_title ? `${row.product_title} — ${row.name}` : row.name)}</p>
       <p class="meta">SKU ${escapeHtml(row.sku)} · ${escapeHtml(format)}</p>
-      <p class="meta target">expects /backend/catalog/products/${escapeHtml(row.product_id)}/variants/${escapeHtml(row.id)}</p>
+      <p class="meta target">expects /backend/catalog/products/${escapeHtml(row.product_id)}</p>
     </article>`)
 }
 
@@ -109,7 +109,7 @@ const html = `<!DOCTYPE html>
 <header>
   <h1>Barcode scanner test sheet</h1>
   <p>${cards.length} catalog variant${cards.length === 1 ? '' : 's'} with a barcode. Open this on a screen and scan it with a phone, or print it.</p>
-  <p>Scanning any code below should land on that variant's edit form in the admin panel.</p>
+  <p>Scanning any code below should land on that variant's <strong>product</strong> edit form in the admin panel.</p>
   <p>Generated ${new Date().toISOString()}</p>
 </header>
 <div class="grid">${cards.join('\n')}</div>
