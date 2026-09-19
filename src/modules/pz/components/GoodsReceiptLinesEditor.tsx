@@ -94,89 +94,99 @@ export function GoodsReceiptLinesEditor({ value, onChange, error, disabled }: Go
 
   return (
     <div className="space-y-3">
-      <Table>
-        <TableCaption className="sr-only">{t('pz.goodsReceipts.form.lines.caption')}</TableCaption>
-        <TableHeader>
-          <TableRow>
-            <TableHead scope="col" className="w-16">{t('pz.goodsReceipts.form.lines.column.position')}</TableHead>
-            <TableHead scope="col">{t('pz.goodsReceipts.form.lines.column.product')}</TableHead>
-            <TableHead scope="col" className="w-40">{t('pz.goodsReceipts.form.lines.column.quantity')}</TableHead>
-            <TableHead scope="col" className="w-32">{t('pz.goodsReceipts.form.lines.column.unit')}</TableHead>
-            <TableHead scope="col" className="w-12">
-              <span className="sr-only">{t('pz.goodsReceipts.form.lines.column.actions')}</span>
-            </TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {value.length === 0 ? (
+      {/*
+        The line editor needs more width than a phone has: a product picker, a quantity, a
+        unit and a remove control per row. It scrolls inside its own box so the PAGE never
+        gains a horizontal scrollbar, which is what makes the rest of the form unusable at
+        that width. `relative` is what makes the clipping hold: the screen-reader labels
+        below are absolutely positioned, and without a positioned ancestor they resolve
+        against the viewport, escape the box and put the page back off-screen.
+      */}
+      <div className="relative w-full overflow-x-auto">
+        <Table>
+          <TableCaption className="sr-only">{t('pz.goodsReceipts.form.lines.caption')}</TableCaption>
+          <TableHeader>
             <TableRow>
-              <TableCell colSpan={5} className="text-sm text-muted-foreground">
-                {t('pz.goodsReceipts.form.lines.empty')}
-              </TableCell>
+              <TableHead scope="col" className="w-16">{t('pz.goodsReceipts.form.lines.column.position')}</TableHead>
+              <TableHead scope="col">{t('pz.goodsReceipts.form.lines.column.product')}</TableHead>
+              <TableHead scope="col" className="w-40">{t('pz.goodsReceipts.form.lines.column.quantity')}</TableHead>
+              <TableHead scope="col" className="w-32">{t('pz.goodsReceipts.form.lines.column.unit')}</TableHead>
+              <TableHead scope="col" className="w-12">
+                <span className="sr-only">{t('pz.goodsReceipts.form.lines.column.actions')}</span>
+              </TableHead>
             </TableRow>
-          ) : (
-            value.map((line, index) => {
-              const position = index + 1
-              return (
-                <TableRow key={line.key}>
-                  <TableCell>{position}</TableCell>
-                  <TableCell>
-                    {/*
-                      `ComboboxInput` takes no `aria-label`, and a shared placeholder cannot
-                      tell two lines apart for a screen reader. A wrapping label names the
-                      control it contains, so each row announces its own position.
-                    */}
-                    <label>
-                      <span className="sr-only">
-                        {t('pz.goodsReceipts.form.lines.product.label', undefined, { position })}
-                      </span>
-                      <ComboboxInput
-                        value={line.catalogProductId}
-                        onChange={(next) => handleProductChange(line.key, next)}
-                        placeholder={t('pz.goodsReceipts.form.lines.product.placeholder')}
-                        loadSuggestions={loadProducts}
-                        resolveLabel={resolveProductLabel}
-                        allowCustomValues={false}
-                        clearable={false}
+          </TableHeader>
+          <TableBody>
+            {value.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={5} className="text-sm text-muted-foreground">
+                  {t('pz.goodsReceipts.form.lines.empty')}
+                </TableCell>
+              </TableRow>
+            ) : (
+              value.map((line, index) => {
+                const position = index + 1
+                return (
+                  <TableRow key={line.key}>
+                    <TableCell>{position}</TableCell>
+                    <TableCell>
+                      {/*
+                        `ComboboxInput` takes no `aria-label`, and a shared placeholder cannot
+                        tell two lines apart for a screen reader. A wrapping label names the
+                        control it contains, so each row announces its own position.
+                      */}
+                      <label>
+                        <span className="sr-only">
+                          {t('pz.goodsReceipts.form.lines.product.label', undefined, { position })}
+                        </span>
+                        <ComboboxInput
+                          value={line.catalogProductId}
+                          onChange={(next) => handleProductChange(line.key, next)}
+                          placeholder={t('pz.goodsReceipts.form.lines.product.placeholder')}
+                          loadSuggestions={loadProducts}
+                          resolveLabel={resolveProductLabel}
+                          allowCustomValues={false}
+                          clearable={false}
+                          disabled={disabled}
+                        />
+                      </label>
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        value={line.quantity}
+                        inputMode="decimal"
+                        aria-label={t('pz.goodsReceipts.form.lines.quantity.label', undefined, { position })}
+                        placeholder={t('pz.goodsReceipts.form.lines.quantity.placeholder')}
+                        onChange={(event) => patchLine(line.key, { quantity: event.target.value })}
                         disabled={disabled}
                       />
-                    </label>
-                  </TableCell>
-                  <TableCell>
-                    <Input
-                      value={line.quantity}
-                      inputMode="decimal"
-                      aria-label={t('pz.goodsReceipts.form.lines.quantity.label', undefined, { position })}
-                      placeholder={t('pz.goodsReceipts.form.lines.quantity.placeholder')}
-                      onChange={(event) => patchLine(line.key, { quantity: event.target.value })}
-                      disabled={disabled}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <Input
-                      value={line.unit}
-                      aria-label={t('pz.goodsReceipts.form.lines.unit.label', undefined, { position })}
-                      placeholder={t('pz.goodsReceipts.form.lines.unit.placeholder')}
-                      onChange={(event) => patchLine(line.key, { unit: event.target.value })}
-                      disabled={disabled}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <IconButton
-                      variant="ghost"
-                      aria-label={t('pz.goodsReceipts.form.lines.remove', undefined, { position })}
-                      onClick={() => onChange(value.filter((entry) => entry.key !== line.key))}
-                      disabled={disabled}
-                    >
-                      <Trash2 className="size-4" aria-hidden="true" />
-                    </IconButton>
-                  </TableCell>
-                </TableRow>
-              )
-            })
-          )}
-        </TableBody>
-      </Table>
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        value={line.unit}
+                        aria-label={t('pz.goodsReceipts.form.lines.unit.label', undefined, { position })}
+                        placeholder={t('pz.goodsReceipts.form.lines.unit.placeholder')}
+                        onChange={(event) => patchLine(line.key, { unit: event.target.value })}
+                        disabled={disabled}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <IconButton
+                        variant="ghost"
+                        aria-label={t('pz.goodsReceipts.form.lines.remove', undefined, { position })}
+                        onClick={() => onChange(value.filter((entry) => entry.key !== line.key))}
+                        disabled={disabled}
+                      >
+                        <Trash2 className="size-4" aria-hidden="true" />
+                      </IconButton>
+                    </TableCell>
+                  </TableRow>
+                )
+              })
+            )}
+          </TableBody>
+        </Table>
+      </div>
 
       <Button
         type="button"
