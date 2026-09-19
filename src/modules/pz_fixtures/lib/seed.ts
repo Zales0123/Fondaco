@@ -2,12 +2,28 @@ import type { AwilixContainer } from 'awilix'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { CommandBus, CommandRuntimeContext } from '@open-mercato/shared/lib/commands'
 import { OPTIMISTIC_LOCK_HEADER_NAME } from '@open-mercato/shared/lib/crud/optimistic-lock-headers'
-import { buildFixtureReceipts, FIXTURE_DOCUMENT_PREFIX, type FixtureReceipt } from './receipts'
+import {
+  buildFixtureReceipts,
+  FIXTURE_DOCUMENT_PREFIX,
+  type FixtureIntent,
+  type FixtureReceipt,
+} from './receipts'
+import { readFixtureProducts } from './catalog'
+import { readWarehouseDefaultStates, readWarehouses } from './warehouses'
+import { planDefaultDestinations } from './postingPlan'
+import { enableStockPosting, type StockPostingSetupSummary } from './posting'
+import type { PzFixtureScope } from './scope'
 
-export type PzFixtureScope = {
-  tenantId: string
-  organizationId: string
-  userId?: string | null
+export type { PzFixtureScope } from './scope'
+
+/** What one planned document turned out to be, for the CLI to report. */
+export type SeededDocument = {
+  documentNumber: string
+  warehouseId: string
+  warehouseName: string
+  intent: FixtureIntent
+  intentSatisfied: boolean
+  released: boolean
 }
 
 export type SeedReceiptsSummary = {
@@ -16,10 +32,11 @@ export type SeedReceiptsSummary = {
   alreadyPresent: number
   released: number
   failed: { documentNumber: string; reason: string }[]
+  /** Null when the operator opted out of the toggle flip with `--no-posting`. */
+  posting: StockPostingSetupSummary | null
+  documents: SeededDocument[]
 }
 
-type WarehouseRow = { id: string; name: string }
-type ProductRow = { id: string; title: string | null }
 type ReceiptRow = { id: string; document_number: string; status: string; updated_at: Date }
 
 /**
@@ -66,32 +83,6 @@ function lockRequest(updatedAt: Date): Request {
   })
 }
 
-async function readWarehouses(em: EntityManager, scope: PzFixtureScope): Promise<WarehouseRow[]> {
-  return (await em.getConnection().execute(
-    `select id, name
-       from wms_warehouses
-      where tenant_id = ? and organization_id = ? and deleted_at is null and is_active = true
-      order by name asc, id asc`,
-    [scope.tenantId, scope.organizationId],
-  )) as WarehouseRow[]
-}
-
-/**
- * Only products that can physically arrive. The catalog example seed ships two services
- * billed by the hour, and a goods receipt for a haircut would be nonsense on a screen whose
- * whole job is comparing what was ordered against what turned up on a pallet.
- */
-async function readStockableProducts(em: EntityManager, scope: PzFixtureScope): Promise<ProductRow[]> {
-  return (await em.getConnection().execute(
-    `select id, title
-       from catalog_products
-      where tenant_id = ? and organization_id = ? and deleted_at is null
-        and coalesce(default_unit, '') not in ('hour', 'h', 'godz')
-      order by title asc nulls last, id asc`,
-    [scope.tenantId, scope.organizationId],
-  )) as ProductRow[]
-}
-
 async function readExistingFixtures(em: EntityManager, scope: PzFixtureScope): Promise<Map<string, ReceiptRow>> {
   const rows = (await em.getConnection().execute(
     `select id, document_number, status, updated_at
@@ -107,15 +98,33 @@ export async function seedGoodsReceipts(
   em: EntityManager,
   container: AwilixContainer,
   scope: PzFixtureScope,
-  options: { release?: number } = {},
+  options: { release?: number; enablePosting?: boolean } = {},
 ): Promise<SeedReceiptsSummary> {
   const warehouses = await readWarehouses(em, scope)
   if (warehouses.length === 0) throw new Error('No active warehouse in scope. Seed wms first.')
 
-  const products = await readStockableProducts(em, scope)
+  const products = await readFixtureProducts(em, container, scope)
   if (products.length === 0) throw new Error('No stockable catalog product in scope. Seed the catalog first.')
 
-  const planned = buildFixtureReceipts(warehouses, products)
+  // Posting is set up before the documents are planned, not after: which Warehouses can be
+  // posted into is what decides where the postable document goes, and the same read answers
+  // both questions. Opting out skips the writes, never the read — a document promising to be
+  // postable still has to land somewhere that can take it.
+  const posting = options.enablePosting === false
+    ? null
+    : await enableStockPosting(em, container, scope, warehouses)
+  const destinations = posting?.destinations
+    ?? planDefaultDestinations(await readWarehouseDefaultStates(em, container, scope, warehouses))
+  const eligibleByWarehouse = new Map(destinations.map((plan) => [plan.warehouseId, plan.eligibleCount > 0]))
+  const nameByWarehouse = new Map(warehouses.map((warehouse) => [String(warehouse.id), warehouse.name]))
+
+  const planned = buildFixtureReceipts(
+    warehouses.map((warehouse) => ({
+      id: String(warehouse.id),
+      hasEligibleDestination: eligibleByWarehouse.get(String(warehouse.id)) === true,
+    })),
+    products.map((product) => ({ id: product.id, tracked: product.tracked, receivable: product.receivable })),
+  )
   const existing = await readExistingFixtures(em, scope)
   const commandBus = container.resolve('commandBus') as CommandBus
 
@@ -125,9 +134,18 @@ export async function seedGoodsReceipts(
     alreadyPresent: 0,
     released: 0,
     failed: [],
+    posting,
+    documents: planned.map((receipt) => ({
+      documentNumber: receipt.documentNumber,
+      warehouseId: receipt.warehouseId,
+      warehouseName: nameByWarehouse.get(receipt.warehouseId) ?? receipt.warehouseId,
+      intent: receipt.intent,
+      intentSatisfied: receipt.intentSatisfied,
+      released: false,
+    })),
   }
 
-  const createdIds: string[] = []
+  const createdIds: { id: string; documentNumber: string }[] = []
   for (const receipt of planned) {
     if (existing.has(receipt.documentNumber)) {
       summary.alreadyPresent += 1
@@ -138,7 +156,7 @@ export async function seedGoodsReceipts(
         'pz.goodsReceipts.create',
         { input: toCreateInput(receipt), ctx: buildCommandContext(scope, container) },
       )
-      createdIds.push(String(result.id))
+      createdIds.push({ id: String(result.id), documentNumber: receipt.documentNumber })
       summary.created += 1
     } catch (error) {
       summary.failed.push({
@@ -149,23 +167,25 @@ export async function seedGoodsReceipts(
   }
 
   const releaseTarget = Math.max(0, Math.min(options.release ?? 0, createdIds.length))
-  for (const id of createdIds.slice(0, releaseTarget)) {
+  for (const created of createdIds.slice(0, releaseTarget)) {
     try {
       // Re-read rather than reuse the create result: the release guard compares against the
       // stored `updated_at`, and the value the create returned is the one it must match.
       const [row] = (await em.getConnection().execute(
         'select updated_at from pz_goods_receipts where id = ? and tenant_id = ? and organization_id = ?',
-        [id, scope.tenantId, scope.organizationId],
+        [created.id, scope.tenantId, scope.organizationId],
       )) as { updated_at: Date }[]
       if (!row) continue
       await commandBus.execute(
         'pz.goodsReceipts.release',
-        { input: { id }, ctx: buildCommandContext(scope, container, lockRequest(new Date(row.updated_at))) },
+        { input: { id: created.id }, ctx: buildCommandContext(scope, container, lockRequest(new Date(row.updated_at))) },
       )
       summary.released += 1
+      const document = summary.documents.find((entry) => entry.documentNumber === created.documentNumber)
+      if (document) document.released = true
     } catch (error) {
       summary.failed.push({
-        documentNumber: id,
+        documentNumber: created.documentNumber,
         reason: `release failed: ${error instanceof Error ? error.message : String(error)}`,
       })
     }

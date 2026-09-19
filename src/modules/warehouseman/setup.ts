@@ -11,6 +11,7 @@ import { E } from '#generated/entities.ids.generated'
 import { createLogger } from '@open-mercato/shared/lib/logger'
 import { resolveSeedWarehouseman } from './lib/demoCredentials'
 import { ASSIGNED_WAREHOUSE_FIELD_KEY } from './lib/customFields'
+import { ensureDemoWarehouseLocations } from './lib/demoLocations'
 
 const DEMO_WAREHOUSE_CODE = 'DEMO-WH'
 const DEMO_WAREHOUSE_NAME = 'Magazyn Demonstracyjny'
@@ -88,14 +89,21 @@ export const setup: ModuleSetupConfig = {
     }
 
     const scope = { tenantId, organizationId }
-    const userId = await ensureDemoWarehouseman(em, { ...scope, ...credentials })
-    if (!userId) return
-
+    // The warehouse, and the Locations inside it, are ensured before the account is
+    // considered. `ensureDemoWarehouseman` answers `null` for an account that already
+    // exists, so gating this on a *fresh* account would mean an environment seeded
+    // before the Locations fixture existed could never gain them: the hook would return
+    // above and leave `DEMO-WH` a warehouse the floor can never post stock into. Both
+    // calls are idempotent, so running them on every seed costs nothing and lets an
+    // older environment heal itself.
     const warehouseId = await ensureDemoWarehouse(em, scope)
-    if (!warehouseId) return
+
+    const userId = await ensureDemoWarehouseman(em, { ...scope, ...credentials })
+    if (!userId || !warehouseId) return
 
     // Only a freshly seeded account is given a warehouse. Re-running the seed must
-    // never overwrite an assignment somebody made on purpose.
+    // never overwrite an assignment somebody made on purpose — which is why the
+    // assignment, unlike the warehouse above, stays behind the fresh-account guard.
     const dataEngine = container.resolve('dataEngine') as DataEngine
     await setCustomFieldsIfAny({
       dataEngine,
@@ -110,9 +118,16 @@ export const setup: ModuleSetupConfig = {
 }
 
 /**
- * The demo warehouse. `wms` is an optional peer: if it is not installed its table
- * does not exist, and a demo account with no warehouse is a perfectly good panel
- * demo, so the failure is logged and swallowed rather than breaking `mercato init`.
+ * The demo warehouse, and the Locations inside it. `wms` is an optional peer: if it is
+ * not installed its table does not exist, and a demo account with no warehouse is a
+ * perfectly good panel demo, so the failure is logged and swallowed rather than breaking
+ * `mercato init`.
+ *
+ * The Locations are seeded here rather than in `wms_fixtures` because this hook is what
+ * creates `DEMO-WH` in the first place, and `wms_fixtures`'s own `seedExamples` has
+ * already run by then — see `lib/demoLocations.ts` for the long version. They are seeded
+ * on both branches below, so a warehouse that predates this fixture still gains them on
+ * the next seed rather than staying a warehouse nobody can post stock into.
  */
 async function ensureDemoWarehouse(
   em: EntityManager,
@@ -125,7 +140,10 @@ async function ensureDemoWarehouse(
       organizationId: scope.organizationId,
       deletedAt: null,
     })
-    if (existing) return String(existing.id)
+    if (existing) {
+      await ensureDemoWarehouseLocations(em, existing, scope)
+      return String(existing.id)
+    }
 
     const warehouse = em.create(Warehouse, {
       name: DEMO_WAREHOUSE_NAME,
@@ -137,6 +155,10 @@ async function ensureDemoWarehouse(
     em.persist(warehouse)
     await em.flush()
     logger.info('Seeded the demo warehouse', { code: DEMO_WAREHOUSE_CODE })
+    // Deliberately after the flush, and deliberately not inside this try's failure path:
+    // the helper never throws, so a Location problem can neither lose the warehouse id
+    // nor cost the demo account its warehouse assignment.
+    await ensureDemoWarehouseLocations(em, warehouse, scope)
     return String(warehouse.id)
   } catch (error) {
     logger.warn('Skipping the demo warehouse: the wms module is unavailable', { err: error })
