@@ -1,0 +1,244 @@
+"use client"
+import { apiCall, readApiResultOrThrow, withScopedApiRequestHeaders } from '@open-mercato/ui/backend/utils/apiCall'
+import { buildOptimisticLockHeader } from '@open-mercato/ui/backend/utils/optimisticLock'
+import { buildReceivingListQuery, type WarehouseFilter } from './receivingPanel'
+
+export type ReceivingDocument = {
+  id: string
+  documentNumber: string
+  documentDate: string | null
+  supplierName: string
+  warehouseId: string
+  warehouseSnapshot: { name: string; code: string } | null
+  palletCount: number
+  updatedAt: string | null
+}
+
+export type PalletStatus = 'open' | 'closed'
+
+export type Pallet = {
+  id: string
+  code: string
+  label: string | null
+  status: PalletStatus
+  lineCount: number
+  updatedAt: string | null
+}
+
+export type PalletLine = {
+  id: string
+  catalogVariantId: string
+  /** Empty when the variant has neither a count-time snapshot nor a live catalog row. */
+  name: string
+  sku: string | null
+  quantity: string
+  updatedAt: string | null
+}
+
+/** What a pallet transition and a pallet creation answer with — never the whole list row. */
+export type PalletWriteResult = {
+  id: string
+  code?: string
+  status: PalletStatus
+  updatedAt: string | null
+}
+
+export type PalletLineWriteResult = {
+  id: string
+  quantity: string
+  updatedAt: string | null
+}
+
+export type PalletCodeMatch = {
+  id: string
+  code: string
+  goodsReceiptId: string
+  status: PalletStatus
+}
+
+export type ResolvedVariant = {
+  catalogVariantId: string
+  catalogProductId: string
+  name: string | null
+  sku: string | null
+  barcode: string
+}
+
+export type VariantOption = { value: string; label: string }
+
+/**
+ * A refusal the panel has to react to by status — a 404 opens the product picker, a 409 on a
+ * pallet code names another document, a 409 on a quantity reloads the row. `message` is the
+ * server's already-localized text, or empty so every call site falls back to its own key.
+ */
+export class ReceivingApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+    this.name = 'ReceivingApiError'
+  }
+}
+
+type ListResponse<T> = { items?: T[] }
+
+async function readList<T>(url: string): Promise<T[]> {
+  const call = await apiCall<ListResponse<T>>(url)
+  if (!call.ok) throw toApiError(call.status, call.result)
+  return call.result?.items ?? []
+}
+
+async function send<T>(
+  url: string,
+  method: 'POST' | 'PUT' | 'DELETE',
+  body: Record<string, unknown>,
+  expectedVersion?: string | null,
+): Promise<T> {
+  return withScopedApiRequestHeaders(buildOptimisticLockHeader(expectedVersion), async () => {
+    const call = await apiCall<T>(url, {
+      method,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!call.ok) throw toApiError(call.status, call.result)
+    return call.result as T
+  })
+}
+
+function toApiError(status: number, payload: unknown): ReceivingApiError {
+  const message = payload && typeof payload === 'object' ? (payload as { error?: unknown }).error : null
+  return new ReceivingApiError(typeof message === 'string' ? message : '', status)
+}
+
+export async function fetchReceivingDocuments(warehouse: WarehouseFilter): Promise<ReceivingDocument[]> {
+  const query = new URLSearchParams(buildReceivingListQuery(warehouse))
+  return readList<ReceivingDocument>(`/api/pz/goods-receipts?${query.toString()}`)
+}
+
+export async function fetchReceivingDocument(id: string): Promise<ReceivingDocument | null> {
+  const items = await readList<ReceivingDocument>(
+    `/api/pz/goods-receipts?ids=${encodeURIComponent(id)}&pageSize=1`,
+  )
+  return items[0] ?? null
+}
+
+export async function fetchPallets(goodsReceiptId: string): Promise<Pallet[]> {
+  return readList<Pallet>(`/api/pz/pallets?goodsReceiptId=${encodeURIComponent(goodsReceiptId)}&pageSize=100`)
+}
+
+export async function createPallet(goodsReceiptId: string): Promise<PalletWriteResult> {
+  return send<PalletWriteResult>('/api/pz/pallets', 'POST', { goodsReceiptId })
+}
+
+export async function deletePallet(id: string, expectedVersion: string | null): Promise<void> {
+  await send<{ id: string }>('/api/pz/pallets', 'DELETE', { id }, expectedVersion)
+}
+
+/** Throws 404 for a code nobody has, and 409 when the code belongs to another document. */
+export async function findPalletByCode(code: string, goodsReceiptId: string): Promise<PalletCodeMatch> {
+  const query = new URLSearchParams({ code, goodsReceiptId })
+  const call = await apiCall<PalletCodeMatch>(`/api/pz/pallets/by-code?${query.toString()}`)
+  if (!call.ok) throw toApiError(call.status, call.result)
+  return call.result as PalletCodeMatch
+}
+
+export async function closePallet(id: string, expectedVersion: string | null): Promise<PalletWriteResult> {
+  return send<PalletWriteResult>('/api/pz/pallets/close', 'POST', { id }, expectedVersion)
+}
+
+export async function reopenPallet(id: string, expectedVersion: string | null): Promise<PalletWriteResult> {
+  return send<PalletWriteResult>('/api/pz/pallets/reopen', 'POST', { id }, expectedVersion)
+}
+
+export async function fetchPalletLines(palletId: string): Promise<PalletLine[]> {
+  return readList<PalletLine>(`/api/pz/pallet-lines?palletId=${encodeURIComponent(palletId)}&pageSize=100`)
+}
+
+/** Adds to the (pallet, variant) row, creating it when this is the first scan of the product. */
+export async function countPalletLine(input: {
+  palletId: string
+  catalogVariantId: string
+  quantity: string
+}): Promise<PalletLineWriteResult> {
+  return send<PalletLineWriteResult>('/api/pz/pallet-lines', 'POST', input)
+}
+
+/** Replaces the counted quantity; the version is what makes a concurrent count answer 409. */
+export async function updatePalletLine(input: {
+  id: string
+  quantity: string
+  expectedVersion: string | null
+}): Promise<PalletLineWriteResult> {
+  return send<PalletLineWriteResult>('/api/pz/pallet-lines', 'PUT', { id: input.id, quantity: input.quantity }, input.expectedVersion)
+}
+
+export async function deletePalletLine(id: string, expectedVersion: string | null): Promise<void> {
+  await send<{ id: string }>('/api/pz/pallet-lines', 'DELETE', { id }, expectedVersion)
+}
+
+/** Throws 404 when no catalog variant carries the barcode, which opens the product picker. */
+export async function resolveVariantByBarcode(barcode: string): Promise<ResolvedVariant> {
+  const call = await apiCall<ResolvedVariant>(
+    `/api/pz/receiving/variant-by-barcode?barcode=${encodeURIComponent(barcode)}`,
+  )
+  if (!call.ok) throw toApiError(call.status, call.result)
+  return call.result as ResolvedVariant
+}
+
+type CatalogVariantsResponse = {
+  items: Array<{ id: string; name?: string | null; sku?: string | null }>
+}
+
+function variantLabel(item: CatalogVariantsResponse['items'][number]): string {
+  const name = item.name?.trim() || item.id
+  const sku = item.sku?.trim()
+  return sku ? `${name} — ${sku}` : name
+}
+
+/**
+ * The installed catalog variant option source, used only for the unknown-barcode fallback.
+ * A failed lookup offers nothing rather than taking the counting screen down: the barcode
+ * path is what the floor uses, and the picker is already the exceptional route.
+ */
+export async function searchCatalogVariants(query?: string): Promise<VariantOption[]> {
+  const params = new URLSearchParams({ pageSize: '20', isActive: 'true' })
+  if (query && query.trim()) params.set('search', query.trim())
+  try {
+    const data = await readApiResultOrThrow<CatalogVariantsResponse>(`/api/catalog/variants?${params.toString()}`)
+    return (data?.items ?? []).map((item) => ({ value: item.id, label: variantLabel(item) }))
+  } catch {
+    return []
+  }
+}
+
+type WarehousesResponse = {
+  items: Array<{ id: string; name?: string | null; code?: string | null }>
+}
+
+function warehouseLabel(item: WarehousesResponse['items'][number]): string {
+  const name = item.name?.trim() || item.id
+  const code = item.code?.trim()
+  return code ? `${name} (${code})` : name
+}
+
+/** The same Warehouse option source the goods receipt form uses, degrading the same way. */
+export async function searchWarehouses(query?: string): Promise<VariantOption[]> {
+  const params = new URLSearchParams({ pageSize: '50', isActive: 'true' })
+  if (query && query.trim()) params.set('search', query.trim())
+  try {
+    const data = await readApiResultOrThrow<WarehousesResponse>(`/api/wms/warehouses?${params.toString()}`)
+    return (data?.items ?? []).map((item) => ({ value: item.id, label: warehouseLabel(item) }))
+  } catch {
+    return []
+  }
+}
+
+export async function resolveWarehouseLabel(warehouseId: string): Promise<string> {
+  try {
+    const data = await readApiResultOrThrow<WarehousesResponse>(
+      `/api/wms/warehouses?ids=${encodeURIComponent(warehouseId)}&pageSize=1`,
+    )
+    const item = data?.items?.[0]
+    return item ? warehouseLabel(item) : warehouseId
+  } catch {
+    return warehouseId
+  }
+}

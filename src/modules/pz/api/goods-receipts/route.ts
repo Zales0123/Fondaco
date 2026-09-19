@@ -102,7 +102,7 @@ const routeMetadata = {
 const rawBodySchema = z.object({}).passthrough()
 
 /**
- * Line counts are a per-page aggregate, not a column: the header deliberately stores no
+ * Line and pallet counts are per-page aggregates, not columns: the header stores no
  * denormalised total, and `transformItem` is synchronous. `afterList` is the one hook
  * that can issue the grouped count for exactly the ids the page already resolved.
  */
@@ -127,6 +127,12 @@ type PzReadDatabase = {
     quantity: string
     unit: string | null
     uom_snapshot: GoodsReceiptUomSnapshot | null
+  }
+  pz_pallets: {
+    id: string
+    goods_receipt_id: string
+    tenant_id: string
+    organization_id: string
   }
 }
 
@@ -153,13 +159,13 @@ function resolveScopedOrganizationIds(ctx: CrudCtx): string[] | null {
   )
 }
 
-async function decorateLines(
+async function decorateCountsAndLines(
   payload: { items?: GoodsReceiptListItem[] },
   ctx: CrudCtx & { query: GoodsReceiptListQuery },
 ): Promise<void> {
   const items = Array.isArray(payload.items) ? payload.items : []
   if (items.length === 0) return
-  // No trusted tenant means no trusted count. Leaving every `lineCount` at its serialised
+  // No trusted tenant means no trusted count. Leaving the counts at their serialised
   // 0 is the fail-closed answer; an unscoped aggregate is not.
   const tenantId = ctx.auth?.tenantId ?? null
   if (!tenantId) return
@@ -169,6 +175,17 @@ async function decorateLines(
   const ids = items.map((item) => item.id)
   const em = ctx.container.resolve<EntityManager>('em')
   const db = em.getKysely<PzReadDatabase>()
+
+  let countedPallets = db
+    .selectFrom('pz_pallets')
+    .select('goods_receipt_id')
+    .select((eb) => eb.fn.count<string>('id').as('pallet_count'))
+    .where('goods_receipt_id', 'in', ids)
+    .where('tenant_id', '=', tenantId)
+  if (scopedOrgIds !== null) countedPallets = countedPallets.where('organization_id', 'in', scopedOrgIds)
+  const palletRows = await countedPallets.groupBy('goods_receipt_id').execute()
+  const palletCounts = new Map(palletRows.map((row) => [String(row.goods_receipt_id), Number(row.pallet_count)]))
+  for (const item of items) item.palletCount = palletCounts.get(item.id) ?? 0
 
   if (isSingleRecordRequest(ctx.query)) {
     let detail = db
@@ -318,7 +335,7 @@ export const { metadata, GET, POST, PUT, DELETE } = makeCrudRoute({
   },
   hooks: {
     afterList: async (payload, ctx) => {
-      await decorateLines(payload as { items?: GoodsReceiptListItem[] }, ctx)
+      await decorateCountsAndLines(payload as { items?: GoodsReceiptListItem[] }, ctx)
     },
   },
 })
@@ -345,8 +362,9 @@ const goodsReceiptListItemSchema = z.object({
   supplierName: z.string(),
   warehouseId: z.string().uuid(),
   warehouseSnapshot: warehouseSnapshotSchema,
-  status: z.enum(['draft', 'confirmed']),
+  status: z.enum(['draft', 'receiving', 'confirmed']),
   lineCount: z.number().int(),
+  palletCount: z.number().int(),
   lines: z.array(goodsReceiptLineItemSchema).nullable(),
   updatedAt: z.string().nullable(),
 })
@@ -377,12 +395,12 @@ export const openApi: OpenApiRouteDoc = createPzCrudOpenApi({
     schema: goodsReceiptUpdateBodySchema,
     responseSchema: goodsReceiptCreatedSchema,
     description:
-      'Replaces a draft goods receipt and all of its lines in one transaction. Confirmed documents are refused. Send the record version in the `x-om-ext-optimistic-lock-expected-updated-at` header; a stale version is answered with 409.',
+      'Replaces a draft goods receipt and all of its lines in one transaction. Receiving and confirmed documents are refused. Send the record version in the `x-om-ext-optimistic-lock-expected-updated-at` header; a stale version is answered with 409.',
   },
   del: {
     schema: goodsReceiptDeleteBodySchema,
     responseSchema: goodsReceiptOkSchema,
     description:
-      'Soft-deletes a draft goods receipt, freeing its Document Number for reuse. Confirmed documents are refused.',
+      'Soft-deletes a draft goods receipt, freeing its Document Number for reuse. Receiving and confirmed documents are refused.',
   },
 })

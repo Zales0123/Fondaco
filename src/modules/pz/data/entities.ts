@@ -8,7 +8,23 @@ import {
   Property,
 } from '@mikro-orm/decorators/legacy'
 
-export type GoodsReceiptStatus = 'draft' | 'confirmed'
+/**
+ * `receiving` sits between `draft` and `confirmed` (ADR-0008): the office has released the
+ * document to the floor, so it is frozen exactly as a confirmed one is, but nothing is final
+ * until the floor has counted and the office confirms.
+ */
+export type GoodsReceiptStatus = 'draft' | 'receiving' | 'confirmed'
+
+/** A released document is frozen for the same reasons a confirmed one is, so both refuse edits. */
+export const FROZEN_GOODS_RECEIPT_STATUSES: readonly GoodsReceiptStatus[] = ['receiving', 'confirmed']
+
+export type PalletStatus = 'open' | 'closed'
+
+/** Product name and SKU as they stood when the variant was first counted onto the pallet. */
+export type PalletLineCatalogSnapshot = {
+  name: string
+  sku: string | null
+}
 
 /** Warehouse name and code as they stood when the document was confirmed. */
 export type GoodsReceiptWarehouseSnapshot = {
@@ -92,6 +108,10 @@ export class GoodsReceipt {
   @OneToMany(() => GoodsReceiptLine, (line) => line.goodsReceipt)
   lines = new Collection<GoodsReceiptLine>(this)
 
+  /** In-module relation: a Pallet is part of this document and cannot outlive it (ADR-0009). */
+  @OneToMany(() => Pallet, (pallet) => pallet.goodsReceipt)
+  pallets = new Collection<Pallet>(this)
+
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()
 
@@ -149,6 +169,127 @@ export class GoodsReceiptLine {
 
   @Property({ name: 'uom_snapshot', type: 'jsonb', nullable: true })
   uomSnapshot?: GoodsReceiptUomSnapshot | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+}
+
+/**
+ * A counting carrier belonging to exactly one Goods Receipt. Counted quantities live here and
+ * on its lines, never on `pz_goods_receipt_lines` (ADR-0009): expected and counted are
+ * assertions by different authors, and one product legitimately lands on several Pallets.
+ *
+ * Hard-deleted rather than soft-deleted, and only while `open` and empty, so deleting frees the
+ * code. Deleting a Goods Receipt is only possible in `draft`, where no Pallet can exist, so no
+ * cascade is needed.
+ */
+@Entity({ tableName: 'pz_pallets' })
+@Index({
+  name: 'pz_pallets_scope_receipt_idx',
+  properties: ['tenantId', 'organizationId', 'goodsReceipt'],
+})
+@Index({
+  name: 'pz_pallets_receipt_status_idx',
+  properties: ['goodsReceipt', 'status'],
+})
+/**
+ * The code is scanned by someone who has not said which document they mean, so it is unique
+ * across the whole Organization rather than per receipt (ADR-0010), and `lower(...)` so a
+ * scanner that upper-cases cannot mint a second pallet.
+ */
+@Index({
+  name: 'pz_pallets_code_unique_idx',
+  expression:
+    'create unique index "pz_pallets_code_unique_idx" on "pz_pallets" ("tenant_id", "organization_id", lower("code"))',
+})
+export class Pallet {
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @ManyToOne(() => GoodsReceipt, { fieldName: 'goods_receipt_id' })
+  goodsReceipt!: GoodsReceipt
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  /** Generated at creation and immutable; never user-supplied. */
+  @Property({ name: 'code', type: 'text' })
+  code!: string
+
+  /** A free note for the floor — decoration, never a lookup key. */
+  @Property({ name: 'label', type: 'text', nullable: true })
+  label?: string | null
+
+  @Property({ type: 'text', default: 'open' })
+  status: PalletStatus = 'open'
+
+  @Property({ name: 'closed_at', type: Date, nullable: true })
+  closedAt?: Date | null
+
+  @OneToMany(() => PalletLine, (line) => line.pallet)
+  lines = new Collection<PalletLine>(this)
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+}
+
+/**
+ * One product and its counted quantity on one Pallet. One row per (Pallet, variant): the floor
+ * corrects a miscount by editing one number, which an append-only scan log would turn into
+ * find-the-wrong-row archaeology. Removal deletes the row — a quantity of zero would assert
+ * presence and absence at once.
+ */
+@Entity({ tableName: 'pz_pallet_lines' })
+@Index({
+  name: 'pz_pallet_lines_scope_idx',
+  properties: ['tenantId', 'organizationId', 'catalogVariantId'],
+})
+/** One row per (Pallet, variant) is the whole model: the database enforces it, and the count
+ *  command turns the unique violation into an add rather than an error. */
+@Index({
+  name: 'pz_pallet_lines_pallet_variant_unique_idx',
+  expression:
+    'create unique index "pz_pallet_lines_pallet_variant_unique_idx" on "pz_pallet_lines" ("pallet_id", "catalog_variant_id")',
+})
+export class PalletLine {
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @ManyToOne(() => Pallet, { fieldName: 'pallet_id' })
+  pallet!: Pallet
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  /** `catalog:catalog_product_variant` id. Scalar by contract (ADR-0004, ADR-0007). */
+  @Property({ name: 'catalog_variant_id', type: 'uuid' })
+  catalogVariantId!: string
+
+  /** Stored alongside the variant so counts can be read product-first. */
+  @Property({ name: 'catalog_product_id', type: 'uuid' })
+  catalogProductId!: string
+
+  @Property({ name: 'catalog_snapshot', type: 'jsonb', nullable: true })
+  catalogSnapshot?: PalletLineCatalogSnapshot | null
+
+  /**
+   * Always `> 0`. Counting adds to it, editing replaces it, and it carries no unit: the floor
+   * cannot answer a unit question mid-count, so the quantity is in the variant's default unit.
+   */
+  @Property({ name: 'quantity', type: 'numeric', precision: 18, scale: 4, default: '0' })
+  quantity: string = '0'
 
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()

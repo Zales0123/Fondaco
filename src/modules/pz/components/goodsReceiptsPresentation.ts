@@ -3,6 +3,8 @@ import * as React from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { apiCall, readApiResultOrThrow, withScopedApiRequestHeaders } from '@open-mercato/ui/backend/utils/apiCall'
 import { buildOptimisticLockHeader } from '@open-mercato/ui/backend/utils/optimisticLock'
+import { showRecordConflict, surfaceRecordConflict } from '@open-mercato/ui/backend/conflicts'
+import { extractOptimisticLockConflict } from '@open-mercato/ui/backend/utils/optimisticLock'
 
 export const GOODS_RECEIPTS_ENTITY_ID = 'pz:goods_receipt'
 export const GOODS_RECEIPTS_MANAGE_FEATURE = 'pz.goodsReceipts.manage'
@@ -104,15 +106,15 @@ export function useGoodsReceiptPermissions(): GoodsReceiptPermissions {
   return permissions
 }
 
-/**
- * Confirmation is its own endpoint with its own permission, so it does not go through the
- * CRUD update helper. It carries the version the user was shown, so confirming a document
- * someone else has since changed fails with a conflict instead of freezing a snapshot of
- * something this user never read.
- */
-export async function confirmGoodsReceipt(id: string, expectedVersion: string | null): Promise<void> {
+/** Domain transitions carry the version the user saw so a stale action fails closed. */
+export async function transitionGoodsReceipt(action: 'release' | 'withdraw' | 'confirm', id: string, expectedVersion: string | null): Promise<void> {
   await withScopedApiRequestHeaders(buildOptimisticLockHeader(expectedVersion), async () => {
-    const call = await apiCall<{ error?: string }>('/api/pz/goods-receipts/confirm', {
+    const call = await apiCall<{
+      error?: string
+      code?: string
+      currentUpdatedAt?: string
+      expectedUpdatedAt?: string
+    }>(`/api/pz/goods-receipts/${action}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ id }),
@@ -120,7 +122,20 @@ export async function confirmGoodsReceipt(id: string, expectedVersion: string | 
     if (!call.response.ok) {
       // No English fallback here: an empty message is what makes every caller fall back to
       // its own localized string rather than printing one this module hard-coded.
-      throw Object.assign(new Error(call.result?.error ?? ''), { status: call.response.status })
+      throw Object.assign(new Error(call.result?.error ?? ''), call.result, { status: call.response.status })
     }
   })
+}
+
+export function confirmGoodsReceipt(id: string, expectedVersion: string | null): Promise<void> {
+  return transitionGoodsReceipt('confirm', id, expectedVersion)
+}
+
+export function surfaceGoodsReceiptConflict(error: unknown, t: (key: string, fallback?: string) => string): boolean {
+  const lock = extractOptimisticLockConflict(error)
+  if (lock) {
+    showRecordConflict({ message: error instanceof Error ? error.message : lock.error, currentUpdatedAt: lock.currentUpdatedAt })
+    return true
+  }
+  return surfaceRecordConflict(error, t)
 }

@@ -60,10 +60,41 @@ _Avoid_: Receipt date, delivery date, entry date
 
 **Confirm**:
 The one-way act of finalizing a Goods Receipt, after which it can no longer be changed.
-Confirming records that a delivery happened; it does not move stock.
+Confirming records that the floor counted the delivery and the count is final; it does not
+move stock.
 _Avoid_: Post, approve, submit, finalize, close
 
 **Draft**:
 A Goods Receipt that has been entered but not yet confirmed. The only state in which it
 can be edited or deleted.
 _Avoid_: Pending, open, unposted, new
+
+## Receiving
+
+**Receiving**:
+The floor act of counting what physically arrived against a Goods Receipt. A phase of that
+document, not a document of its own.
+_Avoid_: Intake, goods-in, unloading, delivery check
+
+**Release**:
+The act by which the office hands a Goods Receipt to the floor, freezing it so the expected
+quantities cannot move while they are being counted against.
+_Avoid_: Start receiving, publish, send to warehouse, dispatch
+
+**Pallet**:
+A carrier the goods of one Goods Receipt are counted onto, identified by its own barcode.
+It belongs to that document and cannot outlive it.
+_Avoid_: Palette, unit, handling unit, container, LPN
+
+**Pallet Line**:
+A single product and its counted quantity on one Pallet. One per product per Pallet: a
+running total, never a record of an individual scan.
+_Avoid_: Scan, count line, position, entry
+
+**Close**:
+The act by which a Warehouseman declares a Pallet counted. Reversible, unlike Confirm.
+_Avoid_: Finish, complete, seal, lock
+
+**Surplus**:
+A product counted on a Pallet that no Line of the Goods Receipt expected.
+_Avoid_: Extra, overdelivery, unexpected item, nadwyzka

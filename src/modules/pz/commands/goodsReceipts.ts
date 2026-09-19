@@ -35,6 +35,8 @@ import { E } from '@/.mercato/generated/entities.ids.generated'
 import {
   GoodsReceipt,
   GoodsReceiptLine,
+  Pallet,
+  FROZEN_GOODS_RECEIPT_STATUSES,
   type GoodsReceiptCatalogSnapshot,
   type GoodsReceiptStatus,
   type GoodsReceiptUomSnapshot,
@@ -728,17 +730,15 @@ registerCommand(createGoodsReceiptCommand)
 /**
  * Reads a goods receipt for a write and holds it until the transaction commits.
  *
- * The row is locked, so the three things a write has to agree on — it exists in the
- * caller's scope, it is still a draft, and the caller holds the version they were shown —
- * cannot stop being true between the check and the write. Checking outside the transaction
+ * The row is locked, so scope, status and version cannot change between their checks and
+ * the write. Checking outside the transaction
  * would leave a window in which a concurrent confirmation commits and this write then
  * overwrites or deletes a confirmed document (ADR-0006).
  */
-async function lockDraftForWrite(
+async function lockReceiptForWrite(
   em: EntityManager,
   scope: GoodsReceiptScope,
   id: string,
-  expectedVersion: string,
   translate: TranslateFn,
 ): Promise<GoodsReceipt> {
   const receipt = assertFound(
@@ -754,20 +754,46 @@ async function lockDraftForWrite(
     ),
     translate('pz.goodsReceipts.errors.notFound', 'That goods receipt no longer exists.'),
   )
-  if (receipt.status !== 'draft') {
-    throw conflict(
-      translate(
-        'pz.goodsReceipts.errors.confirmedImmutable',
-        'A confirmed goods receipt can no longer be changed.',
-      ),
-    )
-  }
+  return receipt
+}
+
+function assertGoodsReceiptVersion(receipt: GoodsReceipt, id: string, expectedVersion: string): void {
   assertOptimisticLock({
     resourceKind: GOODS_RECEIPT_ENTITY_ID,
     resourceId: id,
     expected: expectedVersion,
     current: receipt.updatedAt,
   })
+}
+
+export function assertGoodsReceiptEditable(
+  receipt: Pick<GoodsReceipt, 'status'>,
+  translate: TranslateFn,
+): void {
+  if (!FROZEN_GOODS_RECEIPT_STATUSES.includes(receipt.status)) return
+  throw conflict(
+    receipt.status === 'receiving'
+      ? translate(
+          'pz.goodsReceipts.errors.receivingImmutable',
+          'This goods receipt is being counted against and can no longer be changed.',
+        )
+      : translate(
+          'pz.goodsReceipts.errors.confirmedImmutable',
+          'A confirmed goods receipt can no longer be changed.',
+        ),
+  )
+}
+
+async function lockDraftForWrite(
+  em: EntityManager,
+  scope: GoodsReceiptScope,
+  id: string,
+  expectedVersion: string,
+  translate: TranslateFn,
+): Promise<GoodsReceipt> {
+  const receipt = await lockReceiptForWrite(em, scope, id, translate)
+  assertGoodsReceiptEditable(receipt, translate)
+  assertGoodsReceiptVersion(receipt, id, expectedVersion)
   return receipt
 }
 
@@ -1326,6 +1352,129 @@ const deleteGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
 registerCommand(updateGoodsReceiptCommand)
 registerCommand(deleteGoodsReceiptCommand)
 
+const releaseGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsReceipt> = {
+  id: 'pz.goodsReceipts.release',
+  isUndoable: false,
+  async execute(rawInput, ctx) {
+    const { translate } = await resolveTranslations()
+    const scope = ensureGoodsReceiptScope(ctx, translate)
+    const id = requireRecordId(rawInput, translate)
+    const expectedVersion = requireExpectedVersion(ctx, translate)
+    const em = (ctx.container.resolve('em') as EntityManager).fork()
+    let receipt!: GoodsReceipt
+
+    await runCrudCommandWrite<GoodsReceipt>({
+      ctx,
+      em,
+      entityId: GOODS_RECEIPT_ENTITY_ID,
+      action: 'updated',
+      scope,
+      events: goodsReceiptCrudEvents,
+      indexer: goodsReceiptCrudIndexer,
+      syncOrigin: ctx.syncOrigin,
+      phases: [
+        async ({ em: tx }) => {
+          receipt = await lockReceiptForWrite(tx, scope, id, translate)
+          if (receipt.status !== 'draft') {
+            throw conflict(translate('pz.goodsReceipts.errors.notDraft', 'Only a draft goods receipt can be released.'))
+          }
+          assertGoodsReceiptVersion(receipt, id, expectedVersion)
+        },
+        ({ em: tx }) => {
+          receipt.status = 'receiving'
+          receipt.updatedAt = new Date()
+          tx.persist(receipt)
+        },
+      ],
+      sideEffect: () => ({
+        entity: receipt,
+        identifiers: { id, tenantId: scope.tenantId, organizationId: scope.organizationId },
+      }),
+    })
+    return receipt
+  },
+  captureAfter: (_input, result, ctx) => snapshotAggregate(ctx, result),
+  buildLog: async ({ result, snapshots }) => {
+    const { translate } = await resolveTranslations()
+    return {
+      actionLabel: translate('pz.audit.goodsReceipts.release', 'Release goods receipt to receiving'),
+      resourceKind: 'pz.goods_receipt',
+      resourceId: String(result.id),
+      tenantId: result.tenantId,
+      organizationId: result.organizationId,
+      snapshotAfter: snapshots.after as SerializedGoodsReceipt,
+    }
+  },
+}
+
+const withdrawGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsReceipt> = {
+  id: 'pz.goodsReceipts.withdraw',
+  isUndoable: false,
+  async execute(rawInput, ctx) {
+    const { translate } = await resolveTranslations()
+    const scope = ensureGoodsReceiptScope(ctx, translate)
+    const id = requireRecordId(rawInput, translate)
+    const expectedVersion = requireExpectedVersion(ctx, translate)
+    const em = (ctx.container.resolve('em') as EntityManager).fork()
+    let receipt!: GoodsReceipt
+
+    await runCrudCommandWrite<GoodsReceipt>({
+      ctx,
+      em,
+      entityId: GOODS_RECEIPT_ENTITY_ID,
+      action: 'updated',
+      scope,
+      events: goodsReceiptCrudEvents,
+      indexer: goodsReceiptCrudIndexer,
+      syncOrigin: ctx.syncOrigin,
+      phases: [
+        async ({ em: tx }) => {
+          receipt = await lockReceiptForWrite(tx, scope, id, translate)
+          if (receipt.status !== 'receiving') {
+            throw conflict(translate('pz.goodsReceipts.errors.notReceiving', 'This goods receipt is not receiving.'))
+          }
+          assertGoodsReceiptVersion(receipt, id, expectedVersion)
+          const palletCount = await tx.count(Pallet, {
+            goodsReceipt: id,
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+          } as FilterQuery<Pallet>)
+          if (palletCount > 0) {
+            throw conflict(
+              translate('pz.goodsReceipts.errors.withdrawHasPallets', 'A goods receipt with pallets cannot be withdrawn.'),
+            )
+          }
+        },
+        ({ em: tx }) => {
+          receipt.status = 'draft'
+          receipt.updatedAt = new Date()
+          tx.persist(receipt)
+        },
+      ],
+      sideEffect: () => ({
+        entity: receipt,
+        identifiers: { id, tenantId: scope.tenantId, organizationId: scope.organizationId },
+      }),
+    })
+    return receipt
+  },
+  captureAfter: (_input, result, ctx) => snapshotAggregate(ctx, result),
+  buildLog: async ({ result, snapshots }) => {
+    const { translate } = await resolveTranslations()
+    return {
+      actionLabel: translate('pz.audit.goodsReceipts.withdraw', 'Withdraw goods receipt to draft'),
+      resourceKind: 'pz.goods_receipt',
+      resourceId: String(result.id),
+      tenantId: result.tenantId,
+      organizationId: result.organizationId,
+      snapshotAfter: snapshots.after as SerializedGoodsReceipt,
+    }
+  },
+}
+
+registerCommand(releaseGoodsReceiptCommand)
+registerCommand(withdrawGoodsReceiptCommand)
+
 /**
  * Confirmation is where the warehouse stops being a live reference and becomes part of the
  * record. A warehouse that has since been deleted is a data problem to surface rather than
@@ -1385,10 +1534,28 @@ const confirmGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsR
       syncOrigin: ctx.syncOrigin,
       phases: [
         async ({ em: tx }) => {
-          // The same guard an edit runs, so a second confirmation meets the same refusal:
-          // the row is held until commit, and a concurrent confirm cannot slip between the
-          // status check and the write.
-          receipt = await lockDraftForWrite(tx, scope, id, expectedVersion, translate)
+          receipt = await lockReceiptForWrite(tx, scope, id, translate)
+          if (receipt.status !== 'receiving') {
+            throw conflict(
+              translate('pz.goodsReceipts.errors.confirmNotReceiving', 'Only a receiving goods receipt can be confirmed.'),
+            )
+          }
+          assertGoodsReceiptVersion(receipt, id, expectedVersion)
+          const openPallets = await tx.find(Pallet, {
+            goodsReceipt: id,
+            tenantId: scope.tenantId,
+            organizationId: scope.organizationId,
+            status: 'open',
+          } as FilterQuery<Pallet>)
+          if (openPallets.length > 0) {
+            throw conflict(
+              translate(
+                'pz.goodsReceipts.errors.confirmPalletsOpen',
+                '{count} pallet(s) are still open: {pallets}.',
+                { count: openPallets.length, pallets: openPallets.map((pallet) => pallet.code).sort().join(', ') },
+              ),
+            )
+          }
           lines = await findScopedLines(tx, id, scope)
         },
         async ({ em: tx }) => {

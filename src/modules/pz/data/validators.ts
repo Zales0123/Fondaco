@@ -1,6 +1,8 @@
 import { z } from 'zod'
 
-export const goodsReceiptStatusSchema = z.enum(['draft', 'confirmed'])
+export const goodsReceiptStatusSchema = z.enum(['draft', 'receiving', 'confirmed'])
+
+export const palletStatusSchema = z.enum(['open', 'closed'])
 
 /**
  * A calendar day, the same shape the document itself is written in. An empty string is
