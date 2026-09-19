@@ -8,6 +8,7 @@
  */
 import type { QueryEngine } from '@open-mercato/shared/lib/query/types'
 import { E } from '@/.mercato/generated/entities.ids.generated'
+import { BULK_BARCODE_FIELD_KEY, BULK_QUANTITY_FIELD_KEY } from './bulkBarcodeFields'
 
 export type VariantBarcodeScope = { tenantId: string; organizationId: string }
 
@@ -17,6 +18,12 @@ export type CountedVariant = {
   name: string
   sku: string | null
   barcode: string
+  /**
+   * How many base units one scan of the matched code counts as: 1 for the piece `barcode`,
+   * or the variant's `bulk_quantity` custom field when the scan matched its bulk (carton)
+   * barcode instead (issue #35).
+   */
+  quantityMultiplier: number
 }
 
 export type VariantBarcodeResolution =
@@ -56,19 +63,25 @@ export async function resolveVariantByBarcode(
   return { kind: 'resolved', variant: candidates[0] }
 }
 
+const BULK_BARCODE_CF_FIELD = `cf:${BULK_BARCODE_FIELD_KEY}`
+const BULK_QUANTITY_CF_FIELD = `cf:${BULK_QUANTITY_FIELD_KEY}`
+
 type VariantRow = {
   id: string
   product_id: string
   name: string | null
   sku: string | null
   barcode: string | null
+  'cf:bulk_barcode'?: string | null
+  'cf:bulk_quantity'?: number | string | null
 }
 
 type ProductRow = { id: string; title: string | null }
 
 /**
- * Two candidates are read even though one is expected: a barcode shared by two variants has
- * to be detectable, and truncating the page to one would present it as an ordinary match.
+ * Two candidates are read even though one is expected: a barcode shared by two variants — or
+ * a piece barcode colliding with another variant's bulk barcode — has to be detectable, and
+ * truncating the page to one would present it as an ordinary match.
  */
 async function findVariantsByBarcode(
   queryEngine: QueryEngine,
@@ -78,8 +91,10 @@ async function findVariantsByBarcode(
   const result = await queryEngine.query<VariantRow>(E.catalog.catalog_product_variant, {
     tenantId: scope.tenantId,
     organizationId: scope.organizationId,
-    fields: ['id', 'product_id', 'name', 'sku', 'barcode'],
-    filters: { barcode: { $eq: barcode } },
+    fields: ['id', 'product_id', 'name', 'sku', 'barcode', BULK_BARCODE_CF_FIELD, BULK_QUANTITY_CF_FIELD],
+    filters: {
+      $or: [{ barcode: { $eq: barcode } }, { [BULK_BARCODE_CF_FIELD]: { $eq: barcode } }],
+    },
     page: { page: 1, pageSize: 2 },
   })
   return result.items
@@ -102,6 +117,22 @@ async function findProductTitles(
 }
 
 /**
+ * The piece barcode always wins ties (an operator scanning a variant's own barcode should
+ * never have that read as "one carton"), and a bulk match only counts its multiplier when
+ * it carries a positive whole `bulk_quantity` — the incomplete-config guard in
+ * `../data/guards.ts` keeps that pairing intact at write time, but a stale or malformed
+ * value read back is still treated as an ordinary, unmultiplied match rather than thrown.
+ */
+function resolveQuantityMultiplier(row: VariantRow, barcode: string): number {
+  if (row.barcode === barcode) return 1
+  if (row['cf:bulk_barcode'] === barcode) {
+    const bulkQuantity = Number(row['cf:bulk_quantity'])
+    if (Number.isInteger(bulkQuantity) && bulkQuantity > 0) return bulkQuantity
+  }
+  return 1
+}
+
+/**
  * A variant may carry no name of its own, in which case the product's title is what the
  * floor recognises on the shelf; the SKU is the last resort so a row is never nameless.
  */
@@ -113,6 +144,7 @@ export function toCountedVariant(row: VariantRow, productTitle: string | null, b
     name,
     sku: row.sku ?? null,
     barcode: row.barcode ?? barcode,
+    quantityMultiplier: resolveQuantityMultiplier(row, barcode),
   }
 }
 

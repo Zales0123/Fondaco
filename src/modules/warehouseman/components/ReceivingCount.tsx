@@ -126,6 +126,13 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
     }
     try {
       const variant = await resolveVariantByBarcode(scanned)
+      // A bulk (carton) code prefills the multiplier instead of submitting straight away, so
+      // the Warehouseman sees and can still overwrite it before the count is recorded — the
+      // same "scan, then confirm" round trip an empty quantity field already forces today.
+      if (!quantity.trim() && variant.quantityMultiplier > 1) {
+        setQuantity(String(variant.quantityMultiplier))
+        return
+      }
       await recordCount(variant.catalogVariantId, variant.name)
     } catch (error) {
       if (error instanceof ReceivingApiError && error.status === 404) {

@@ -25,6 +25,7 @@ const variantResponseSchema = z.object({
   name: z.string(),
   sku: z.string().nullable(),
   barcode: z.string(),
+  quantityMultiplier: z.number().int().positive(),
 })
 
 const errorSchema = z.object({ error: z.string() }).passthrough()
@@ -104,10 +105,10 @@ export const openApi: OpenApiRouteDoc = {
     GET: {
       summary: 'Resolve a scanned barcode to a catalog variant',
       description:
-        'Resolves one catalog product variant by barcode, scoped to the authenticated tenant and organization. The barcode is normalised first, so the padding and terminator a scanner appends are ignored. A code that matches no variant — or, because the floor cannot adjudicate a catalog problem mid-count, more than one — is answered with 404 and the client falls back to the catalog product picker.',
+        'Resolves one catalog product variant by barcode, scoped to the authenticated tenant and organization. The barcode is normalised first, so the padding and terminator a scanner appends are ignored. Both the variant\'s own barcode and its optional bulk (carton) barcode are checked; a bulk match reports quantityMultiplier as the bulk_quantity custom field, otherwise it is 1. A code that matches no variant — or, because the floor cannot adjudicate a catalog problem mid-count, more than one — is answered with 404 and the client falls back to the catalog product picker.',
       tags: ['Goods Receipts'],
       query: z.object({ barcode: z.string().min(1) }),
-      responses: [{ status: 200, description: 'The variant the barcode identifies.', schema: variantResponseSchema }],
+      responses: [{ status: 200, description: 'The variant the barcode identifies, with its counting multiplier.', schema: variantResponseSchema }],
       errors: [
         { status: 400, description: 'Missing barcode or organization context', schema: errorSchema },
         { status: 401, description: 'Authentication required', schema: errorSchema },

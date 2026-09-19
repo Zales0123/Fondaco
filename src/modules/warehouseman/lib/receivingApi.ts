@@ -62,6 +62,8 @@ export type ResolvedVariant = {
   name: string | null
   sku: string | null
   barcode: string
+  /** 1 for a piece barcode, or the bulk (carton) code's base-unit count when that matched instead. */
+  quantityMultiplier: number
 }
 
 export type VariantOption = { value: string; label: string }

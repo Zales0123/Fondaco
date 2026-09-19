@@ -17,6 +17,7 @@ function variant(overrides: Partial<CountedVariant> = {}): CountedVariant {
     name: 'Kabel USB-C 2m',
     sku: '4411',
     barcode: '5901234123457',
+    quantityMultiplier: 1,
     ...overrides,
   }
 }
@@ -103,5 +104,28 @@ describe('toCountedVariant', () => {
 
   it('echoes the scanned code when the stored barcode is absent', () => {
     expect(toCountedVariant({ ...row, barcode: null }, null, '5901234123457').barcode).toBe('5901234123457')
+  })
+
+  // Issue #35: a bulk (carton) barcode carries a base-unit multiplier.
+  it('reports a multiplier of 1 for an ordinary piece barcode match', () => {
+    expect(toCountedVariant(row, null, '5901234123457').quantityMultiplier).toBe(1)
+  })
+
+  it('reports the bulk quantity when the scan matches the bulk barcode', () => {
+    const bulkRow = { ...row, barcode: '5901234123457', 'cf:bulk_barcode': '9999999999999', 'cf:bulk_quantity': 24 }
+    expect(toCountedVariant(bulkRow, null, '9999999999999').quantityMultiplier).toBe(24)
+  })
+
+  it('prefers the piece barcode when a code matches both fields on the same row', () => {
+    const clashingRow = { ...row, barcode: '5901234123457', 'cf:bulk_barcode': '5901234123457', 'cf:bulk_quantity': 24 }
+    expect(toCountedVariant(clashingRow, null, '5901234123457').quantityMultiplier).toBe(1)
+  })
+
+  it('falls back to a multiplier of 1 when the bulk quantity is missing or not a positive integer', () => {
+    const noQuantity = { ...row, barcode: 'other', 'cf:bulk_barcode': '9999999999999', 'cf:bulk_quantity': null }
+    expect(toCountedVariant(noQuantity, null, '9999999999999').quantityMultiplier).toBe(1)
+
+    const zeroQuantity = { ...row, barcode: 'other', 'cf:bulk_barcode': '9999999999999', 'cf:bulk_quantity': 0 }
+    expect(toCountedVariant(zeroQuantity, null, '9999999999999').quantityMultiplier).toBe(1)
   })
 })
