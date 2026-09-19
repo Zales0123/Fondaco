@@ -1,16 +1,23 @@
 "use client"
 import * as React from 'react'
+import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
 import { EmptyState } from '@open-mercato/ui/primitives/empty-state'
+import { Button } from '@open-mercato/ui/primitives/button'
 import { StatusBadge, type StatusBadgeVariant } from '@open-mercato/ui/primitives/status-badge'
 import { formatDisplayDate } from '@open-mercato/ui/primitives/date-format'
 import { fetchCrudList } from '@open-mercato/ui/backend/utils/crud'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { GoodsReceiptListItem } from '../lib/goodsReceiptListItem'
-import { GOODS_RECEIPTS_ENTITY_ID, GOODS_RECEIPTS_TABLE_ID, useWarehouseNames } from './goodsReceiptsPresentation'
+import {
+  GOODS_RECEIPTS_CREATE_HREF,
+  GOODS_RECEIPTS_ENTITY_ID,
+  GOODS_RECEIPTS_TABLE_ID,
+  useWarehouseNames,
+} from './goodsReceiptsPresentation'
 
 const PAGE_SIZE = 50
 
@@ -110,11 +117,17 @@ export default function GoodsReceiptsTable() {
   )
 
   const columns = React.useMemo(() => buildColumns(t), [t])
+  const createLabel = t('pz.goodsReceipts.table.actions.create')
 
   return (
     <DataTable<GoodsReceiptRow>
       title={t('pz.goodsReceipts.page.title')}
       titleHeadingLevel={1}
+      actions={(
+        <Button asChild>
+          <Link href={GOODS_RECEIPTS_CREATE_HREF}>{createLabel}</Link>
+        </Button>
+      )}
       columns={columns}
       data={rows}
       entityId={GOODS_RECEIPTS_ENTITY_ID}
@@ -125,6 +138,11 @@ export default function GoodsReceiptsTable() {
         <EmptyState
           title={t('pz.goodsReceipts.table.empty.title')}
           description={t('pz.goodsReceipts.table.empty.description')}
+          actions={(
+            <Button asChild>
+              <Link href={GOODS_RECEIPTS_CREATE_HREF}>{createLabel}</Link>
+            </Button>
+          )}
         />
       )}
       pagination={{

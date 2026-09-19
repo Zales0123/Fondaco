@@ -22,10 +22,14 @@ export type GoodsReceiptCatalogSnapshot = {
   sku: string | null
 }
 
-/** Unit of measure as it stood when the line was saved. */
+/**
+ * Unit of measure as it stood when the line was saved: the code the document means, plus
+ * the product's default at that moment, so a later change to the product's default unit
+ * cannot make a past line look like it was entered against a different one.
+ */
 export type GoodsReceiptUomSnapshot = {
   code: string | null
-  label: string | null
+  productDefaultUnit: string | null
 }
 
 @Entity({ tableName: 'pz_goods_receipts' })

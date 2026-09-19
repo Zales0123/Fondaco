@@ -4,7 +4,11 @@ import { makeCrudRoute, type CrudCtx } from '@open-mercato/shared/lib/crud/facto
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { E } from '@/.mercato/generated/entities.ids.generated'
 import { GoodsReceipt, type GoodsReceiptWarehouseSnapshot } from '../../data/entities'
-import { goodsReceiptListSchema, type GoodsReceiptListQuery } from '../../data/validators'
+import {
+  goodsReceiptListSchema,
+  goodsReceiptWriteBodySchema,
+  type GoodsReceiptListQuery,
+} from '../../data/validators'
 import { createPzCrudOpenApi, createPagedListResponseSchema } from '../openapi'
 import {
   toGoodsReceiptListItem,
@@ -28,7 +32,14 @@ const F = {
 
 const routeMetadata = {
   GET: { requireAuth: true, requireFeatures: ['pz.goodsReceipts.view'] },
+  POST: { requireAuth: true, requireFeatures: ['pz.goodsReceipts.manage'] },
 }
+
+/**
+ * The command owns validation so a rejection can name the field that caused it; the route
+ * passes the body through untouched.
+ */
+const rawBodySchema = z.object({}).passthrough()
 
 /**
  * Line counts are a per-page aggregate, not a column: the header deliberately stores no
@@ -91,7 +102,7 @@ async function decorateLineCounts(
   }
 }
 
-export const { metadata, GET } = makeCrudRoute({
+export const { metadata, GET, POST } = makeCrudRoute({
   metadata: routeMetadata,
   orm: {
     entity: GoodsReceipt,
@@ -128,6 +139,8 @@ export const { metadata, GET } = makeCrudRoute({
     // Document Date is day-granular, so same-day receipts would otherwise come back in
     // the database's arbitrary row order and duplicate or skip rows across pages.
     tiebreakSortField: 'id',
+    // A freshly created goods receipt has to be in the index it redirects to.
+    disableListCache: true,
     buildFilters: async (query: GoodsReceiptListQuery) => {
       const filters: Record<string, unknown> = {}
       if (query.id) filters[F.id] = query.id
@@ -141,6 +154,18 @@ export const { metadata, GET } = makeCrudRoute({
       return filters
     },
     transformItem: (item: GoodsReceiptListRow): GoodsReceiptListItem => toGoodsReceiptListItem(item),
+  },
+  actions: {
+    create: {
+      commandId: 'pz.goodsReceipts.create',
+      schema: rawBodySchema,
+      mapInput: ({ parsed }) => parsed,
+      response: ({ result }) => ({
+        id: String((result as GoodsReceipt).id),
+        updatedAt: (result as GoodsReceipt).updatedAt?.toISOString() ?? null,
+      }),
+      status: 201,
+    },
   },
   hooks: {
     afterList: async (payload, ctx) => {
@@ -165,9 +190,20 @@ const goodsReceiptListItemSchema = z.object({
   updatedAt: z.string().nullable(),
 })
 
+const goodsReceiptCreatedSchema = z.object({
+  id: z.string().uuid(),
+  updatedAt: z.string().nullable(),
+})
+
 export const openApi: OpenApiRouteDoc = createPzCrudOpenApi({
   resourceName: 'Goods Receipt',
   pluralName: 'Goods Receipts',
   querySchema: goodsReceiptListSchema,
   listResponseSchema: createPagedListResponseSchema(goodsReceiptListItemSchema),
+  create: {
+    schema: goodsReceiptWriteBodySchema,
+    responseSchema: goodsReceiptCreatedSchema,
+    description:
+      'Creates a goods receipt and all of its lines in one transaction. Tenant and organization scope come from the session, never from the body.',
+  },
 })

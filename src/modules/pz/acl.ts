@@ -20,7 +20,9 @@ export const features = [
     id: 'pz.goodsReceipts.manage',
     title: 'Manage goods receipts',
     module: 'pz',
-    dependsOn: ['pz.goodsReceipts.view'],
+    // Entering a delivery means picking products out of the catalog, so the product
+    // picker's own endpoint is a real prerequisite rather than a nicety.
+    dependsOn: ['pz.goodsReceipts.view', 'catalog.products.view'],
   },
   {
     id: 'pz.goodsReceipts.confirm',

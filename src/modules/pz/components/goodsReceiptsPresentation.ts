@@ -5,6 +5,8 @@ import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 
 export const GOODS_RECEIPTS_ENTITY_ID = 'pz:goods_receipt'
 export const GOODS_RECEIPTS_TABLE_ID = 'pz.goodsReceipts'
+export const GOODS_RECEIPTS_LIST_HREF = '/backend/wms/goods-receipts'
+export const GOODS_RECEIPTS_CREATE_HREF = `${GOODS_RECEIPTS_LIST_HREF}/create`
 
 type WarehouseOptionsResponse = {
   items: Array<{ id: string; name: string }>
