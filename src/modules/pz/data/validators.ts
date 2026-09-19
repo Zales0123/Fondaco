@@ -17,8 +17,15 @@ export type GoodsReceiptListQuery = z.infer<typeof goodsReceiptListSchema>
 
 export const goodsReceiptLineBodySchema = z.object({
   catalogProductId: z.string().uuid(),
-  /** A decimal string or number; a decimal comma is accepted because a Polish keyboard produces one. */
-  quantity: z.union([z.string(), z.number()]),
+  /**
+   * A fractional quantity must be sent as a string — a JSON number cannot carry one
+   * faithfully, and two different quantities would arrive as the same value. A whole count
+   * may be sent as a number. A decimal comma is accepted, because a Polish keyboard
+   * produces one.
+   */
+  quantity: z
+    .union([z.string(), z.number().int().positive()])
+    .describe('Decimal string (e.g. "2.5"), or a whole number. Must be greater than zero.'),
   unit: z.string().max(50).nullable().optional(),
 })
 

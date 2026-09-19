@@ -334,8 +334,24 @@ async function snapshotAggregate(
   receipt: GoodsReceipt,
 ): Promise<SerializedGoodsReceipt> {
   const em = (ctx.container.resolve('em') as EntityManager).fork()
-  const lines = await em.find(GoodsReceiptLine, { goodsReceipt: receipt.id } as FilterQuery<GoodsReceiptLine>)
-  return serializeGoodsReceipt(receipt, lines)
+  return serializeGoodsReceipt(receipt, await findScopedLines(em, receipt.id, receipt))
+}
+
+/**
+ * The foreign key does not constrain a line's duplicated scope to its header's, so every
+ * read of an aggregate's lines repeats the header's trusted tenant and organization rather
+ * than trusting the parent id alone.
+ */
+async function findScopedLines(
+  em: EntityManager,
+  receiptId: string,
+  scope: { tenantId: string; organizationId: string },
+): Promise<GoodsReceiptLine[]> {
+  return em.find(GoodsReceiptLine, {
+    goodsReceipt: receiptId,
+    tenantId: scope.tenantId,
+    organizationId: scope.organizationId,
+  } as FilterQuery<GoodsReceiptLine>)
 }
 
 async function parseInput(raw: unknown, translate: TranslateFn): Promise<GoodsReceiptWriteInput> {
@@ -411,9 +427,7 @@ const restoreCreatedGoodsReceipt = makeCreateRedo<GoodsReceipt, SerializedGoodsR
   transaction: true,
   afterRestore: async ({ em, entity, snapshot }) => {
     if (!snapshot.lines.length) return
-    const existing = await em.find(GoodsReceiptLine, {
-      goodsReceipt: entity.id,
-    } as FilterQuery<GoodsReceiptLine>)
+    const existing = await findScopedLines(em, entity.id, snapshot)
     const present = new Set(existing.map((line) => String(line.id)))
     for (const line of snapshot.lines) {
       if (present.has(line.id)) continue
@@ -552,7 +566,7 @@ const createGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
     return receipt
   },
   captureAfter: (_input, result, ctx) => snapshotAggregate(ctx, result),
-  buildLog: async ({ result, ctx }) => {
+  buildLog: async ({ result, snapshots }) => {
     const { translate } = await resolveTranslations()
     return {
       actionLabel: translate('pz.audit.goodsReceipts.create', 'Create goods receipt'),
@@ -560,7 +574,9 @@ const createGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
       resourceId: String(result.id),
       tenantId: result.tenantId,
       organizationId: result.organizationId,
-      snapshotAfter: await snapshotAggregate(ctx, result),
+      // `captureAfter` already read the aggregate back; reloading it here would open a
+      // second post-commit failure window and could log something the command never returned.
+      snapshotAfter: snapshots.after as SerializedGoodsReceipt,
     }
   },
   async undo({ logEntry, ctx }) {

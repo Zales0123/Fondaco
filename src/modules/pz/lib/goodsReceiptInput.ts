@@ -55,24 +55,22 @@ export function isCalendarDay(value: string): boolean {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
 }
 
-/** The largest quantity a JSON number can carry without `numeric(18,4)` losing digits to binary floating point. */
-export const MAX_SAFE_NUMERIC_QUANTITY = Number.MAX_SAFE_INTEGER / 10 ** QUANTITY_SCALE
-
 /**
  * Accepts what a person types — a decimal comma included — and returns the canonical
  * string the column stores, or `null` when the value is not a quantity a document can
  * carry. Zero and negatives are not quantities here: a line that says nothing arrived is
  * a line that should not exist.
  *
- * The canonicalisation is pure string work. `Number('12345678901234.5678')` is already a
- * different number by the time it is read back, so routing a quantity through a float
- * would quietly change what the document says arrived. A JSON number wide enough to have
- * lost digits before it reached us is refused rather than trusted.
+ * The canonicalisation is pure string work, and a **fractional** quantity is only accepted
+ * as a string. A JSON number cannot carry one faithfully: `900719925474.0002` and
+ * `900719925474.0003` are the same IEEE-754 value, so accepting either would file a
+ * delivery under a quantity nobody wrote. A JSON number is therefore taken only when it is
+ * a safe whole count, which is exactly the case where nothing can be lost.
  */
 export function normalizeQuantity(value: unknown): string | null {
   let raw: string
   if (typeof value === 'number') {
-    if (!Number.isFinite(value) || Math.abs(value) > MAX_SAFE_NUMERIC_QUANTITY) return null
+    if (!Number.isSafeInteger(value) || value <= 0) return null
     raw = String(value)
   } else if (typeof value === 'string') {
     raw = value.trim()

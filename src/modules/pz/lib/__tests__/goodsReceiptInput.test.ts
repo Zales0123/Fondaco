@@ -32,7 +32,7 @@ function parse(payload: Record<string, unknown>) {
 describe('normalizeQuantity', () => {
   it('accepts fractional quantities and stores them at the column precision', () => {
     expect(normalizeQuantity('2.5')).toBe('2.5000')
-    expect(normalizeQuantity(0.125)).toBe('0.1250')
+    expect(normalizeQuantity('0.125')).toBe('0.1250')
   })
 
   it('accepts a decimal comma, because that is what a Polish keyboard produces', () => {
@@ -62,14 +62,28 @@ describe('normalizeQuantity', () => {
     expect(normalizeQuantity('99999999999999.9999')).toBe('99999999999999.9999')
   })
 
-  it('refuses a JSON number too wide to have survived the trip', () => {
+  it('takes a fractional quantity only as a string, because a JSON number cannot carry one', () => {
+    // 900719925474.0002 and 900719925474.0003 are the same IEEE-754 value, so neither is
+    // a quantity a document can be trusted to have recorded.
+    expect(900719925474.0002).toBe(900719925474.0003)
+    expect(normalizeQuantity(900719925474.0002)).toBeNull()
     expect(normalizeQuantity(12345678901234.5678)).toBeNull()
-    expect(normalizeQuantity(900719925474.0991)).toBe('900719925474.0991')
+    expect(normalizeQuantity(2.5)).toBeNull()
+    expect(normalizeQuantity('2.5')).toBe('2.5000')
+  })
+
+  it('accepts a whole count as a number, where nothing can be lost', () => {
+    expect(normalizeQuantity(7)).toBe('7.0000')
+    expect(normalizeQuantity(Number.MAX_SAFE_INTEGER + 2)).toBeNull()
   })
 
   it('refuses exponent notation, which is never what a delivery note says', () => {
     expect(normalizeQuantity('1e5')).toBeNull()
     expect(normalizeQuantity('1E5')).toBeNull()
+  })
+
+  it('accepts a decimal quantity written with a comma', () => {
+    expect(normalizeQuantity('0,125')).toBe('0.1250')
   })
 
   it('treats an all-zero value as no quantity at all', () => {
