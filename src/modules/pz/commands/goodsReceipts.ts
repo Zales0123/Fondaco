@@ -32,6 +32,7 @@ import { createLogger } from '@open-mercato/shared/lib/logger'
 import type { EventBus } from '@open-mercato/events'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { E } from '@/.mercato/generated/entities.ids.generated'
+import type { PzEventId } from '../events'
 import {
   GoodsReceipt,
   GoodsReceiptLine,
@@ -1699,29 +1700,47 @@ const confirmGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsR
   },
 }
 
+/** The least a goods receipt lifecycle event can say: which document, in whose scope. */
+export type GoodsReceiptEventScope = {
+  id: string
+  tenantId: string
+  organizationId: string
+}
+
 /**
- * Emitted after the commit, so a subscriber can never act on a confirmation that did not
- * happen. It is persistent because the whole point of the event is that work can be hung off
- * it later; losing it because a subscriber was momentarily unavailable would make it useless
- * as a seam.
+ * Emitted after the commit, so a subscriber can never act on a transition that did not
+ * happen. It is persistent because the whole point of these events is that work can be hung
+ * off them later; losing one because a subscriber was momentarily unavailable would make it
+ * useless as a seam.
  *
  * The commit has already landed by the time this runs, so a failure cannot be turned into a
- * failed request: the document IS confirmed, and telling the caller otherwise would be a
- * worse lie than a missing broadcast. The cost is real and worth stating — if the queue
- * itself refuses the enqueue, the confirmation stands with no durable event behind it, so
- * this is logged at error rather than warn and is the signal to replay from the record.
+ * failed request: the document IS in its new state, and telling the caller otherwise would be
+ * a worse lie than a missing broadcast. The cost is real and worth stating — if the queue
+ * itself refuses the enqueue, the transition stands with no durable event behind it, so this
+ * is logged at error rather than warn and is the signal to replay from the record.
+ *
+ * Every lifecycle event of this module goes through here — confirmation and both Stock
+ * Posting outcomes — so there is one emission path to reason about rather than three.
  */
-async function emitConfirmed(ctx: CommandRuntimeContext, document: SerializedGoodsReceipt): Promise<void> {
+export async function emitGoodsReceiptLifecycleEvent(
+  ctx: CommandRuntimeContext,
+  event: PzEventId,
+  payload: GoodsReceiptEventScope,
+): Promise<void> {
   try {
     const bus = ctx.container.resolve<EventBus>('eventBus')
-    await bus.emit('pz.goods_receipt.confirmed', document, {
+    await bus.emit(event, payload, {
       persistent: true,
-      tenantId: document.tenantId,
-      organizationId: document.organizationId,
+      tenantId: payload.tenantId,
+      organizationId: payload.organizationId,
     })
   } catch (error) {
-    logger.error('Goods receipt confirmation broadcast failed', { err: error, goodsReceiptId: document.id })
+    logger.error('Goods receipt lifecycle broadcast failed', { err: error, event, goodsReceiptId: payload.id })
   }
+}
+
+async function emitConfirmed(ctx: CommandRuntimeContext, document: SerializedGoodsReceipt): Promise<void> {
+  await emitGoodsReceiptLifecycleEvent(ctx, 'pz.goods_receipt.confirmed', document)
 }
 
 registerCommand(confirmGoodsReceiptCommand)

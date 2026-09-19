@@ -76,10 +76,33 @@ immediately. Setting `OM_SHOW_DEMO_CREDENTIALS=1` prints those credentials on th
 panel login page; it is refused outright when `NODE_ENV` is production, so it can
 only ever advertise a throwaway environment.
 
+`DEMO-WH` is seeded with a location tree as well, through `wms.locations.create`:
+
+| Code | Type | Under |
+|---|---|---|
+| `RECV` | zone | — |
+| `DOCK-IN` | dock | `RECV` |
+| `STG-RECV` | staging | `RECV` |
+| `PICK` | zone | — |
+| `PICK-01`, `PICK-02` | slot | `PICK` |
+| `BULK` | zone | — |
+| `BULK-01` | bin | `BULK` |
+
+That is not decoration. Since ADR-0011 a confirmation posts the counted goods into one
+Warehouse Location, and it is refused outright when the warehouse offers no eligible
+one — active, in this warehouse, childless and of type `bin`, `slot`, `staging` or
+`dock`. A `DEMO-WH` with no locations could be counted into and never confirmed. The
+warehouse's **Default Destination** (the `pz` custom field on `wms:warehouse`) is set to
+`STG-RECV`, so the panel preselects it instead of asking the floor to choose. That field
+belongs to `pz`: if its definition is missing the default is skipped with a log, and the
+warehouse simply asks for a choice.
+
 Nothing is seeded in production unless an operator chooses the password explicitly
 through `OM_INIT_WAREHOUSEMAN_PASSWORD`. Re-running the seed never overwrites an
 assignment somebody made on purpose: only a freshly created demo account is given a
-warehouse.
+warehouse, and an existing Default Destination is left alone. The warehouse and its
+locations are ensured on every run — they are structure, not a decision — and converge
+by code, so a second `mercato init` creates no duplicates.
 
 ## Assigning a warehouse
 

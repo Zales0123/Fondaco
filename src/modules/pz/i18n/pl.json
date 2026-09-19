@@ -1,4 +1,5 @@
 {
+  "notifications.categories.pz": "Przyjęcia towaru",
   "pz.audit.goodsReceipts.confirm": "Zatwierdzenie zlecenia przyjęcia zewnętrznego",
   "pz.audit.goodsReceipts.create": "Utworzenie zlecenia przyjęcia zewnętrznego",
   "pz.audit.goodsReceipts.delete": "Usunięcie zlecenia przyjęcia zewnętrznego",
@@ -180,6 +181,11 @@
   "pz.goodsReceipts.view.snapshotNote": "Dane pokazane tak, jak zapisano je przy tworzeniu i zatwierdzaniu dokumentu — nie zmieniają się, gdy zmieni się katalog lub magazyn.",
   "pz.goodsReceipts.view.title": "Zlecenie przyjęcia zewnętrznego {documentNumber}",
   "pz.goodsReceipts.view.unknownProduct": "Produktu nie ma już w katalogu",
+  "pz.notifications.actions.openGoodsReceipt": "Otwórz zlecenie przyjęcia",
+  "pz.notifications.stockPosted.body": "{quantity} policzone w {variants} produkt(ach) trafiło na stan.",
+  "pz.notifications.stockPosted.title": "Dostawa {documentNumber} jest na stanie",
+  "pz.notifications.stockPostingFailed.body": "{reason} Otwórz zlecenie przyjęcia, aby ponowić przyjęcie na stan.",
+  "pz.notifications.stockPostingFailed.title": "Przyjęcie na stan nie powiodło się — {documentNumber}",
   "pz.palletLines.errors.barcodeRequired": "Zeskanuj lub wpisz kod kreskowy.",
   "pz.palletLines.errors.countFailed": "Nie udało się zapisać policzonej ilości.",
   "pz.palletLines.errors.deleteFailed": "Nie udało się usunąć policzonego towaru.",
