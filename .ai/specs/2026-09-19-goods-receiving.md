@@ -264,6 +264,41 @@ Warehouse option source the Goods Receipt form already uses. Raw IDs never appea
 - **Design-system and theming:** semantic tokens only, as in `PanelShell`; difference and surplus
   are labelled in words with a token-based badge, never color alone; verified in light and dark.
 
+### `/warehouseman/receiving/[receiptId]/summary` — Receiving Summary
+
+```text
+┌────────────────────────────────────────────────────────────┐
+│ Podsumowanie przyjęcia · PZ/12/2026                         │
+│ Dostawca: Hurt-Pol · 3 palety (2 zamknięte)                 │
+│ [ ] pokaż zgodne (4)                                        │
+├────────────────────────────────────────────────────────────┤
+│ Kabel USB-C 2m      SKU 4411   oczek. 20  policz. 12        │
+│                                       [Brakuje 8]      [v]  │
+│   └ PAL-000042: 8 · PAL-000043: 4                           │
+│ Ładowarka 65W       SKU 9012   oczek. 10  policz. 12        │
+│                                     [Nadwyżka 2]       [v]  │
+│ Taśma pakowa        SKU 7781   oczek.  —  policz.  6        │
+│                                  [Spoza dokumentu]     [v]  │
+├────────────────────────────────────────────────────────────┤
+│ Razem: oczekiwano 30 · policzono 24                         │
+└────────────────────────────────────────────────────────────┘
+```
+
+- **Ordering and filtering:** shortages first, ordered by absolute difference descending, then
+  surplus rows (counted but not expected), then over-counts. Rows with difference 0 are hidden
+  behind a **pokaż zgodne** toggle that states how many are hidden, so the default view is a
+  problem list.
+- **Behavior:** every row expands to its per-Pallet breakdown (`PAL-000042: 8 · PAL-000043: 4`),
+  which is how a product split across Pallets is checked without leaving the screen. The screen is
+  read-only on both surfaces — corrections happen on the counting screen, so nothing here can be
+  edited by accident while someone else counts.
+- **Wording:** the difference is stated in words — `Brakuje {n}` / `Nadwyżka {n}` / `Spoza dokumentu`
+  / `Zgodne` — with a token-based badge; color never carries the meaning alone.
+- **Responsive and accessibility:** a table at ≥768px collapsing to stacked rows below it, expanders
+  as real buttons with `aria-expanded`, totals in a footer region announced on load.
+- **Admin placement:** a section on the existing `/backend/wms/goods-receipts/[id]` detail page
+  below the Lines, not a separate tab — the office reads it immediately before pressing Confirm.
+
 ## Data Models
 
 ### `pz_pallets`
@@ -454,7 +489,9 @@ summary computation — extracted so TEST-011/012 do not need a database.
 - **Depends on:** Phase 4 exit gate
 - **Outcome:** expected vs counted, per product, on both surfaces.
 - **Deliverables:** pure summary computation + `receiving-summary` route; Panel summary screen;
-  backend detail summary section; i18n.
+  backend detail summary section; i18n. Presentation is fully specified above — ordering, the
+  `pokaż zgodne` toggle, per-Pallet expanders, wording and placement — so this phase needs no
+  further design input.
 - **Requirements closed:** REQ-007
 - **Tests:** TEST-010, TEST-012
 - **Validation:** full broad gate + `yarn test:integration:ephemeral`
@@ -550,3 +587,4 @@ Verdict: `Ready for implementation`.
 |---|---|
 | 2026-09-19 | Initial draft from the `/grill-with-docs` design interview. |
 | 2026-09-19 | Q-001 resolved (`pz.receiving.count`); status set to `Ready for implementation`. |
+| 2026-09-19 | Receiving Summary presentation specified in full (ordering, toggle, expanders, wording, placement); every phase is agent-ready. |
