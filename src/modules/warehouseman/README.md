@@ -109,6 +109,63 @@ dependencies, so it is unit-tested directly, and it returns nothing — rather t
 guessing — when the user has no assignment, when the assigned warehouse lies outside
 the session's tenant and organization, or when the session carries no usable scope.
 
+## Installing it
+
+The panel is a PWA: it installs to a tablet's home screen and launches without browser
+chrome. Only the panel is — everything hangs off `PanelSurface`, which wraps every panel
+screen and nothing else, so the shared `(frontend)/[...slug]` catch-all never learns this
+module exists and no other surface becomes installable.
+
+| File | What it is |
+| --- | --- |
+| `public/pwa/warehouseman/manifest.webmanifest` | Name, icons, `standalone`, scope and `start_url` of `/warehouseman`. |
+| `public/warehouseman-sw.js` | The service worker. At the site root because a worker cannot claim a scope above its own directory. |
+| `public/pwa/warehouseman/offline.html` | The screen the worker serves when a navigation cannot reach the server. |
+| `scripts/generate-warehouseman-icons.mjs` | Redraws the icons. Run it after changing the mark; the PNGs are checked in. |
+
+Everything else lives under `/pwa/warehouseman/` rather than `/warehouseman/` so no static
+file races the catch-all that resolves the panel's real routes.
+
+### What the worker caches, and what it refuses to
+
+**Navigation responses are never cached.** Every panel screen is server-rendered with the
+signed-in warehouseman's name and warehouse in the top bar, and these tablets are handed
+between shifts — a cached page is somebody else's identity shown to whoever picks the
+tablet up next. `src/modules/warehouseman/__tests__/serviceWorker.test.ts` asserts this
+against the shipped file and is the reason that suite exists.
+
+`/api/*` is never cached either: a stale pallet count shown to somebody counting a pallet
+is worse than an error they can see.
+
+What is cached is what is identical for everyone — fingerprinted `/_next/static/` assets,
+the icons, the offline screen, and `zxing_reader.wasm`, the 1 MB barcode-reader binary
+that otherwise gets re-fetched over dock-door Wi-Fi.
+
+The worker does not call `skipWaiting()`. A new version takes over on the next cold start
+rather than swapping assets under a half-counted pallet.
+
+### What it does not do
+
+Reads and writes still need the network. Every mutation in `lib/receivingApi.ts` depends
+on something the client cannot invent — a server-assigned pallet code, a barcode resolved
+against the catalog, or the optimistic-lock version that makes a concurrent count answer
+409. Queueing counts offline is a different design, not a flag on this one.
+
+A warehouseman who walks out of range gets the offline screen on a navigation, and the
+banner in `PanelOfflineBanner` on a screen they are already on. Both say so plainly, which
+is the whole of the offline story today.
+
+### Installing on a device
+
+Chromium hands the page a `beforeinstallprompt` event, which becomes a real install button
+on the panel home. iOS fires no such event, so there it becomes instructions pointing at
+Share → Add to Home Screen. A device that declines is remembered in `localStorage` and not
+asked again. The decision lives in `lib/installPrompt.ts` and is unit-tested; the card that
+renders it is `components/PanelInstallCard.tsx`.
+
+Note that a service worker never controls the page that registered it. The first visit on a
+device installs the worker; offline protection starts from the next navigation.
+
 ## Language
 
 The panel ships Polish and English catalogs and renders whichever locale the session
