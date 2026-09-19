@@ -26,6 +26,7 @@
   "pz.goodsReceipts.errors.warehouseRequired": "Warehouse is required.",
   "pz.goodsReceipts.form.create.submit": "Save goods receipt",
   "pz.goodsReceipts.form.create.title": "New goods receipt",
+  "pz.goodsReceipts.form.fields.documentDate.description": "The day the delivery arrived. It cannot be in the future.",
   "pz.goodsReceipts.form.fields.documentDate.label": "Document Date",
   "pz.goodsReceipts.form.fields.documentNumber.description": "The number printed on the supplier's paperwork.",
   "pz.goodsReceipts.form.fields.documentNumber.label": "Document Number",

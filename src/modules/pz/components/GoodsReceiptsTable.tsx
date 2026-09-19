@@ -10,7 +10,7 @@ import { StatusBadge, type StatusBadgeVariant } from '@open-mercato/ui/primitive
 import { formatDisplayDate } from '@open-mercato/ui/primitives/date-format'
 import { fetchCrudList } from '@open-mercato/ui/backend/utils/crud'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
 import type { GoodsReceiptListItem } from '../lib/goodsReceiptListItem'
 import {
   GOODS_RECEIPTS_CREATE_HREF,
@@ -39,7 +39,7 @@ const STATUS_VARIANTS: Record<GoodsReceiptListItem['status'], StatusBadgeVariant
 
 type Translate = ReturnType<typeof useT>
 
-function buildColumns(t: Translate): ColumnDef<GoodsReceiptRow>[] {
+function buildColumns(t: Translate, locale: string): ColumnDef<GoodsReceiptRow>[] {
   return [
     {
       accessorKey: 'documentNumber',
@@ -52,7 +52,9 @@ function buildColumns(t: Translate): ColumnDef<GoodsReceiptRow>[] {
       meta: { priority: 2 },
       cell: ({ getValue }) => {
         const value = getValue()
-        const formatted = typeof value === 'string' ? formatDisplayDate(value) : null
+        // Without the app locale this falls back to the browser's, so a Polish UI in an
+        // English browser would print English dates.
+        const formatted = typeof value === 'string' ? formatDisplayDate(value, locale) : null
         return formatted ?? '—'
       },
     },
@@ -88,6 +90,7 @@ function buildColumns(t: Translate): ColumnDef<GoodsReceiptRow>[] {
 
 export default function GoodsReceiptsTable() {
   const t = useT()
+  const locale = useLocale()
   const [page, setPage] = React.useState(1)
   const scopeVersion = useOrganizationScopeVersion()
 
@@ -117,7 +120,7 @@ export default function GoodsReceiptsTable() {
     [items, t, warehouseNames],
   )
 
-  const columns = React.useMemo(() => buildColumns(t), [t])
+  const columns = React.useMemo(() => buildColumns(t, locale), [locale, t])
   const canManage = useCanManageGoodsReceipts()
   const createLabel = t('pz.goodsReceipts.table.actions.create')
   // Offering a create action to someone the create page will refuse is a dead end, not a

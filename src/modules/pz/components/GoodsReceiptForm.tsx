@@ -3,7 +3,8 @@ import * as React from 'react'
 import { CrudForm, type CrudField, type CrudFieldOption, type CrudFormGroup } from '@open-mercato/ui/backend/CrudForm'
 import { createCrud } from '@open-mercato/ui/backend/utils/crud'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { getScheduleLocale } from '@open-mercato/ui/backend/schedule/localization'
 import { GOODS_RECEIPTS_ENTITY_ID, GOODS_RECEIPTS_LIST_HREF } from './goodsReceiptsPresentation'
 import { GoodsReceiptLinesEditor } from './GoodsReceiptLinesEditor'
 import {
@@ -58,6 +59,10 @@ async function resolveWarehouseLabel(warehouseId: string): Promise<string> {
 }
 
 export function useGoodsReceiptFields(t: Translate): CrudField[] {
+  // The date picker renders its own month names, weekday abbreviations and accessible
+  // labels, and falls back to English when no locale is handed to it — so a Polish form
+  // would otherwise open an English calendar.
+  const dateLocale = getScheduleLocale(useLocale())
   return React.useMemo<CrudField[]>(() => [
     {
       id: 'documentNumber',
@@ -74,9 +79,13 @@ export function useGoodsReceiptFields(t: Translate): CrudField[] {
       type: 'date',
       required: true,
       layout: 'half',
+      // The picker cannot explain a day it refuses to offer, so the rule is stated where
+      // the date is entered rather than left for the user to discover.
+      description: t('pz.goodsReceipts.form.fields.documentDate.description'),
       // A delivery cannot arrive tomorrow, so the picker refuses what the server refuses.
       // Built on mount rather than at module scope so it follows the browser's own day.
       maxDate: new Date(),
+      locale: dateLocale,
     },
     {
       id: 'supplierName',
@@ -111,7 +120,7 @@ export function useGoodsReceiptFields(t: Translate): CrudField[] {
         />
       ),
     },
-  ], [t])
+  ], [dateLocale, t])
 }
 
 export function useGoodsReceiptGroups(t: Translate): CrudFormGroup[] {

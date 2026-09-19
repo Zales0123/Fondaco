@@ -26,6 +26,7 @@
   "pz.goodsReceipts.errors.warehouseRequired": "Magazyn jest wymagany.",
   "pz.goodsReceipts.form.create.submit": "Zapisz przyjęcie",
   "pz.goodsReceipts.form.create.title": "Nowe przyjęcie zewnętrzne",
+  "pz.goodsReceipts.form.fields.documentDate.description": "Dzień, w którym dostawa dotarła. Nie może być z przyszłości.",
   "pz.goodsReceipts.form.fields.documentDate.label": "Data dokumentu",
   "pz.goodsReceipts.form.fields.documentNumber.description": "Numer widniejący na dokumencie dostawcy.",
   "pz.goodsReceipts.form.fields.documentNumber.label": "Numer dokumentu",
