@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
+import { adoptSession, hideDevDiagnostics } from './browserSession'
 
 /**
  * Creating a goods receipt is the module's first write, so this spec exercises it at the
@@ -202,17 +203,6 @@ async function listById(request: APIRequestContext, id: string): Promise<GoodsRe
 }
 
 
-/**
- * The dev server floats a runtime-diagnostics banner over the bottom of the page whenever
- * something unrelated logs an error, and it swallows clicks aimed at the controls beneath
- * it. It does not exist in the environments this app ships to, so it is hidden rather than
- * worked around.
- */
-async function hideDevDiagnostics(page: Page): Promise<void> {
-  await page.addStyleTag({
-    content: '[data-testid="dev-runtime-diagnostics-banner"] { display: none !important; }',
-  })
-}
 
 test.describe('TC-PZ-002 create a goods receipt', () => {
   let admin: APIRequestContext
@@ -457,7 +447,7 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
    */
   test('completes a multi-line create from the keyboard alone', async ({ context, page }) => {
     test.setTimeout(180_000)
-    await context.addCookies(adminCookies)
+    await adoptSession(context, adminCookies)
     const documentNumber = `PZ/${RUN}/7`
 
     await page.goto(`${INDEX_PATH}/create`)
@@ -543,7 +533,7 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
   test('a refused save keeps the typed values and creates no header', async ({ context, page }) => {
     // Two searchable pickers plus a full page load; the default 20s is too tight for that.
     test.setTimeout(90_000)
-    await context.addCookies(adminCookies)
+    await adoptSession(context, adminCookies)
     const documentNumber = `PZ/${RUN}/6`
 
     await page.goto(`${INDEX_PATH}/create`)

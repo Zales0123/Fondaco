@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext } from '@playwright/test'
+import { adoptSession } from './browserSession'
 
 /**
  * The index is gated by `pz.goodsReceipts.view` declared in page metadata and route
@@ -66,7 +67,7 @@ test.describe('TC-PZ-001 goods receipts index', () => {
   })
 
   test('a user with the view feature reaches the index and its columns', async ({ context, page }) => {
-    await context.addCookies(adminCookies)
+    await adoptSession(context, adminCookies)
     await page.goto(INDEX_PATH)
     await expect(page.getByRole('heading', { name: PAGE_TITLE })).toBeVisible()
     for (const column of COLUMN_HEADERS) {
@@ -80,7 +81,7 @@ test.describe('TC-PZ-001 goods receipts index', () => {
    * a property of the environment, not of the feature.
    */
   test('an index with nothing in it explains that no deliveries have been recorded', async ({ context, page }) => {
-    await context.addCookies(adminCookies)
+    await adoptSession(context, adminCookies)
     await page.route('**/api/pz/goods-receipts**', (route) =>
       route.fulfill({
         status: 200,
@@ -93,7 +94,7 @@ test.describe('TC-PZ-001 goods receipts index', () => {
   })
 
   test('the list endpoint answers the caller scope and requires the view feature', async ({ context }) => {
-    await context.addCookies(adminCookies)
+    await adoptSession(context, adminCookies)
     const allowed = await context.request.get('/api/pz/goods-receipts?pageSize=1')
     expect(allowed.status(), `list -> ${allowed.status()}: ${await allowed.text()}`).toBe(200)
     const body = (await allowed.json()) as { items?: unknown[]; total?: number }
@@ -101,7 +102,7 @@ test.describe('TC-PZ-001 goods receipts index', () => {
   })
 
   test('a failed load says so instead of claiming there is nothing to show', async ({ context, page }) => {
-    await context.addCookies(adminCookies)
+    await adoptSession(context, adminCookies)
     await page.route('**/api/pz/goods-receipts**', (route) =>
       route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"boom"}' }),
     )
@@ -112,7 +113,7 @@ test.describe('TC-PZ-001 goods receipts index', () => {
   })
 
   test('a user without the view feature is refused the page, the endpoint and the sidebar item', async ({ context, page }) => {
-    await context.addCookies(employeeCookies)
+    await adoptSession(context, employeeCookies)
 
     // Pinned to 403 rather than "any 4xx": a crashing endpoint would satisfy a loose
     // assertion and report the authorization gate as working.

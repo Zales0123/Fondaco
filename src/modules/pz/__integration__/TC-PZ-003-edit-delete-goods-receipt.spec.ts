@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { adoptSession, hideDevDiagnostics } from './browserSession'
 
 /**
  * Editing and deleting a draft, exercised at the module's HTTP API — where every rule this
@@ -101,17 +102,6 @@ function readOperation(response: { headers: () => Record<string, string> }): { i
 }
 
 
-/**
- * The dev server floats a runtime-diagnostics banner over the bottom of the page whenever
- * something unrelated logs an error, and it swallows clicks aimed at the controls beneath
- * it. It does not exist in the environments this app ships to, so it is hidden rather than
- * worked around.
- */
-async function hideDevDiagnostics(page: Page): Promise<void> {
-  await page.addStyleTag({
-    content: '[data-testid="dev-runtime-diagnostics-banner"] { display: none !important; }',
-  })
-}
 
 test.describe('TC-PZ-003 edit and delete draft goods receipts', () => {
   let admin: APIRequestContext
@@ -620,7 +610,7 @@ test.describe('TC-PZ-003 edit and delete draft goods receipts', () => {
 
   test('loads a draft with its lines and saves added and removed lines from the screen', async ({ context, page }) => {
     test.setTimeout(120_000)
-    await context.addCookies(adminCookies)
+    await adoptSession(context, adminCookies)
     const draft = await createDraft(admin, {
       lines: [
         { catalogProductId: productAId, quantity: '2' },
@@ -651,7 +641,7 @@ test.describe('TC-PZ-003 edit and delete draft goods receipts', () => {
 
   test('tells the second editor their copy is stale instead of losing their colleague work', async ({ context, page }) => {
     test.setTimeout(120_000)
-    await context.addCookies(adminCookies)
+    await adoptSession(context, adminCookies)
     const draft = await createDraft(context.request)
 
     await page.goto(`${INDEX_PATH}/${draft.id}/edit`)
