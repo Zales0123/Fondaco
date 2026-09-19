@@ -80,30 +80,22 @@ export function formatCountQuantity(raw: string): string {
   return raw.replace(/\.?0+$/, '') || '0'
 }
 
-export type ScanMultiplierNoticeKind = 'default' | 'armed' | 'invalid'
-export type ScanMultiplierNotice = { kind: ScanMultiplierNoticeKind; message: string }
+/** The smallest a confirmed scan can be: the scan itself asserts the product is there. */
+export const MIN_SCAN_QUANTITY = 1
 
 /**
- * What the quantity field says about the *next* scan, before one is spent finding out.
+ * Moves the pending scan's quantity by one of the step buttons.
  *
- * A multiplier the operator armed and then forgot is the one silent over-count this screen
- * can produce on its own: type 24 for a carton, get interrupted, present the next item, and
- * 24 units land where one belonged — a surplus that reads as a genuine over-delivery. The
- * camera makes that likelier, because the field is armed on one screen and fires on another.
- * So an armed multiplier names itself continuously rather than waiting to be noticed.
- *
- * `invalid` is the same refusal `resolveCountQuantity` would produce, only reached by typing
- * instead of by scanning — the floor learns about a typo without presenting a carton to it.
+ * Clamping at one rather than zero is the whole reason this is a function. Coming back down
+ * from an overshoot with −10 is ordinary — the floor taps `+10` twice, sees 21, and corrects —
+ * and landing on 0 or −7 would put a count on screen that the server is bound to refuse,
+ * discovered only after the button is pressed. A gloved thumb overshooting is expected input,
+ * not a mistake to punish.
  */
-export function describeScanMultiplier(
-  raw: string,
-  messages: { each: string; armed: (quantity: string) => string; invalid: string },
-): ScanMultiplierNotice {
-  if (!raw.trim()) return { kind: 'default', message: messages.each }
-  const parsed = parseCountQuantity(raw)
-  if (!parsed) return { kind: 'invalid', message: messages.invalid }
-  return { kind: 'armed', message: messages.armed(formatCountQuantity(parsed)) }
+export function adjustScanQuantity(current: number, delta: number): number {
+  return Math.max(MIN_SCAN_QUANTITY, current + delta)
 }
+
 
 /**
  * Every `pz` refusal carries an already-localized `error`. Printing it is the only way the

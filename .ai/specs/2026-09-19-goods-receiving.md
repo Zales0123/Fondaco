@@ -283,14 +283,30 @@ scanner dialog in continuous mode:
   │ │          live camera preview           │ │ ← ring flashes per accepted scan
   │ └────────────────────────────────────────┘ │
   │ Skanuj dalej — aparat pozostaje włączony…  │
-  │ Ilość [        ]                           │
-  │ Następny skan doda 24                      │ ← ostrzegawczy, gdy mnożnik ustawiony
   │ Ostatnie skany                             │
   │  ✓ Kabel USB-C 2m +1 → 12                  │
   │  ✓ Kabel USB-C 2m +1 → 11                  │
   │  ✗ Kod 5901234123457 jest nieznany.        │
   │ Kod kreskowy towaru [        ] [Użyj kodu] │
   │ [                Gotowe                  ] │
+  └────────────────────────────────────────────┘
+```
+
+An accepted scan replaces all of that with the quantity step until it is answered — the camera
+keeps running underneath, but nothing is scanned past it:
+
+```text
+  ┌────────────────────────────────────────────┐
+  │ Skanuj towary                              │
+  │ Kabel USB-C 2m                             │
+  │ 5901234123457                              │
+  │                                            │
+  │  ┌────┐ ┌───┐ ┌──────┐ ┌───┐ ┌────┐        │
+  │  │ −10│ │ − │ │  12  │ │ + │ │ +10│        │
+  │  └────┘ └───┘ └──────┘ └───┘ └────┘        │
+  │                 ↑ można też wpisać          │
+  │ [              Dodaj 12                  ] │
+  │ [               Anuluj                   ] │
   └────────────────────────────────────────────┘
 ```
 
@@ -317,25 +333,38 @@ scanner dialog in continuous mode:
   silently consumed either. A code that resolves to no variant closes the camera and hands over to
   the inline picker rather than scanning past it: the picker is on the screen behind the dialog and
   has to be read and tapped.
-- **Quantity while the camera is up:** the dialog is modal, so the counting screen's own quantity
-  field is behind it and unreachable — every camera scan would otherwise mean exactly one unit,
-  whatever the form said. The dialog therefore renders that same field itself. It is the same
-  state, not a copy: what is typed in the dialog is what `recordCount` reads, and the count that
-  consumes it clears it, so a multiplier never survives into the next scan. A failed count keeps
-  it, so a refused scan can be retried on the same terms rather than silently dropping to one.
-  The acceptance rule makes this safe without further locking — ADR-0011 already suspends
-  acceptance while a count is posting, so no scan can land against a multiplier being edited.
-  `BarcodeScannerDialog` learns no domain concepts in the process: it takes an opaque string and
-  an already-translated hint, and all parsing stays in `receivingPanel.ts`.
-- **An armed multiplier names itself:** the value is set while looking at the screen and spent
-  while looking at the pallet, which makes "typed 24 for a carton, got interrupted, scanned the
-  next item" the one silent over-count this screen can produce on its own — a surplus that reads
-  as a genuine over-delivery. So the field states what it will do to the *next* scan continuously
-  rather than waiting to be noticed: blank reads as one unit per scan in muted text, a set value
-  reads as **Następny skan doda 24** against the warning token, and something that is not a
-  quantity is refused there and then, before a carton is presented to find out. `describeScanMultiplier`
-  is the pure function behind all three, both surfaces render the same sentence, and the hint is a
-  live region so the state also reaches a screen reader.
+- **A camera scan asks how many (ADR-0012):** the code names *which* product, never how many, so a
+  camera scan resolves the variant and then stops. A confirmation step takes over the dialog and
+  nothing is recorded until it is answered. One scan can therefore mean a carton of twenty-four
+  rather than one box presented twenty-four times, which is the ordinary shape of a delivery — the
+  scan-means-one reading only ever beat typing while every item was physically presented to the
+  lens. The step starts at 1, so a single item stays two taps.
+- **Sized for a glove:** `−10 − [ 12 ] + +10`, with the number also typeable for an exact odd
+  count. The steppers are the primary control because a gloved hand finds a large button reliably
+  and a text caret badly; `±10` exists so a pallet of forty-eight is five taps rather than
+  forty-seven. `adjustScanQuantity` clamps at one — coming back down from an overshoot is ordinary
+  input, and landing on 0 would put a count on screen the server is bound to refuse. The confirm
+  button states the amount it is about to add (**Dodaj 12**) rather than saying "Add", because a
+  mis-tapped `+10` is a larger error than a duplicated scan ever was.
+- **Nothing is scanned past an unanswered step:** no decode, no manual-entry field, and no
+  Cmd/Ctrl+Enter. `BarcodeScannerDialog` takes the step as an opaque `interruption` node and owns
+  exactly that one rule; the gloved-hands UI and every quantity rule stay in `warehouseman`. The
+  step renders *inside* the scanner dialog rather than as a second modal, because a separate dialog
+  would unmount the `<video>` element holding the `MediaStream` and pay a fresh camera start per
+  counted item, on top of nesting two focus traps.
+- **ADR-0011 is frozen, not repealed, while the step is open:** neither a decode nor an empty frame
+  is observed, exactly as while a count is posting. After confirming, the carton is usually still in
+  front of the lens — the operator was looking at the screen — so without the repeat rule the step
+  would immediately re-raise for the item just counted. Freezing rather than ignoring matters
+  because a device lowered to tap `+10` shows an empty frame for far longer than the three ticks
+  that mean "the carton left", and advancing through that would invent a second carton.
+- **Cancel is free, refusal is not punished:** nothing is written until the step is answered, so a
+  misread barcode costs a tap rather than a correction on the pallet, and a count the server refuses
+  leaves the step open with the chosen amount intact.
+- **The typed path is unchanged:** a wedge-scanned or hand-typed code carries its quantity in the
+  field beside it on the same screen, already visible and already reachable, so a step there would
+  be ceremony. Blank still means one unit. Both paths resolve and refuse a code on identical terms
+  and differ only in where the amount comes from.
 - **Scan feedback:** the operator is looking at the pallet, not at the screen, so an accepted scan
   flashes a ring over the preview, plays a short blip and vibrates, and appends a line to the **Ostatnie
   skany** list showing the product, what the scan added and the resulting total — the running total,
@@ -634,17 +663,19 @@ side — reverting the Panel change leaves a working text-field count. `BarcodeS
 shared by three call sites, which makes its props a contract surface: read
 `.ai/guides/upstream/BACKWARD_COMPATIBILITY.md` before changing them again.
 
-**Backward compatibility of the in-dialog quantity.** Read under that same rule, and additive on
-every axis it touches. `BarcodeScannerDialog` gained six optional props (`quantity`,
-`onQuantityChange`, `quantityLabel`, `quantityPlaceholder`, `quantityHint`, `quantityHintTone`);
-nothing is removed, renamed or narrowed, and the whole group renders only when `onQuantityChange`
-is supplied, so the two call sites that scan a pallet label or a catalog barcode render exactly
-what they rendered before. `describeScanMultiplier` is a new export beside `resolveCountQuantity`,
-which is unchanged and still the single authority on what a scan counts — the new function
-describes that decision and never makes a different one. The server is untouched: no route, payload,
-entity, column or command signature changed, so there is no migration and nothing to roll back
-server-side. Reverting the change leaves camera scans counting one unit each, which is the
-behavior this phase started from.
+**Backward compatibility of the quantity step.** Read under that same rule, and additive on every
+axis it touches. `BarcodeScannerDialog` gained one optional prop, `interruption`; nothing is
+removed, renamed or narrowed. Omitted, it is `null` and the dialog renders and behaves exactly as
+before, so `/backend/catalog/scan` and the pallet-label scan on the pallets screen are unaffected.
+The prop carries a behavioral contract worth stating plainly, because it is not inferable from the
+type: **while it is non-null the dialog accepts no scan and freezes the repeat-rule state.** A
+future caller that passes a node without wanting that gate would be misusing it.
+
+`scanStream.ts` and its tests are untouched — ADR-0012 changes when the rule is consulted, never the
+rule. `adjustScanQuantity` is a new export beside `resolveCountQuantity`, which is unchanged and
+still what the typed path uses. The server is untouched: no route, payload, entity, column or
+command signature changed, so there is no migration and nothing to roll back server-side. Reverting
+leaves camera scans counting one unit each, which is the behavior this phase started from.
 
 ## Risks and Tradeoffs
 

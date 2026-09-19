@@ -43,30 +43,37 @@ behaviour.
 |---|---|---|
 | `continuous` | `false` | Keeps scanning; adds a full-width **Done** button, because the dialog no longer closes itself. |
 | `log` | `undefined` | Running history, **newest entry first** — the natural shape of `[entry, ...previous]`. The first five render under the video in that order, each with a check/cross icon so the outcome never rests on colour alone. |
-| `onQuantityChange` | `undefined` | Renders the quantity field under the preview. Without it nothing is rendered and the dialog is byte-identical to before. |
-| `quantity` | `''` | The field's value. The dialog **never parses or defaults it** — it is the caller's string, echoed straight back. |
-| `quantityLabel` / `quantityPlaceholder` | `undefined` | Already-translated copy, like `manualLabel`. |
-| `quantityHint` / `quantityHintTone` | `undefined` / `'neutral'` | Line under the field, in a live region. `'notice'` and `'error'` raise it to the warning and error tokens. |
+| `interruption` | `undefined` | A step that must be answered before scanning continues. Takes over the dialog body and **suspends acceptance entirely**. |
 
-### Why the dialog has a quantity field it does not understand
+### `interruption`: the caller needs an answer before the next scan
 
-A modal covers the screen that opened it. A caller that attaches a number to
-each scan keeps that number on its own form — and the moment the camera is up,
-the operator cannot reach it. Every scan then means one, whatever the form says.
+Some callers cannot act on a code alone. Counting a delivery is the example:
+the code names *which* product, but not *how many*, and one scan should be able
+to mean a carton of twenty-four rather than one box presented twenty-four times.
 
-So the field is reachable from inside the dialog, but its *meaning* stays with
-the caller: what blank means, what counts as valid, and what an armed value
-implies are all domain questions. `src/modules/warehouseman` answers them in
-`lib/receivingPanel.ts` (`resolveCountQuantity`, `describeScanMultiplier`) and
-passes down only a string and a sentence. A scanner that knew what a quantity
-*was* would have to be taught again for the next caller that counts something
-else.
+So the caller renders its own question — `warehouseman`'s is
+`components/ScanQuantityStep.tsx` — and hands it over as a node. The dialog
+knows nothing about what is being asked. It owns exactly one rule: **while an
+interruption is up, nothing is scanned.** Concretely that means the poll loop
+returns before reading the frame, the manual-entry field is hidden and its
+Cmd/Ctrl+Enter is refused, and the Done button is out of reach.
 
-The hint is a live region on purpose. The value is armed while looking at the
-screen and spent while looking at the pallet, and a multiplier somebody set and
-forgot is a silent over-count — the one failure mode this field adds.
+Two details are load-bearing:
+
+- **The `<video>` element is hidden, never unmounted.** It holds the live
+  `MediaStream`. Dropping it would stop the camera and make every counted item
+  pay a fresh `getUserMedia` start — one to two seconds, per carton. This is
+  also why the step is not a second stacked dialog.
+- **The repeat-rule state is frozen**, not advanced — neither a decode nor an
+  empty frame is observed, exactly as while `busy`. See the ADR note below.
 
 ### When does the same barcode count twice?
+
+> Under `interruption`, "after the step closes *and* the code has since left the
+> frame". The freeze is what makes that true: a carton still in front of the lens
+> when the step closes is the one just counted, not a new one, and lowering the
+> device to tap `+10` must not be read as it leaving. See `docs/adr/0011` and
+> `docs/adr/0012`.
 
 Counting a pallet means scanning **twenty identical cartons in a row**, and
 every one of them has to count — so "ignore the same code for N milliseconds"

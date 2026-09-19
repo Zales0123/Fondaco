@@ -2,8 +2,8 @@ import { describe, expect, it } from '@jest/globals'
 import {
   buildReceivingListQuery,
   describePalletLookupFailure,
+  adjustScanQuantity,
   describePalletPrintOutcome,
-  describeScanMultiplier,
   formatCountQuantity,
   normalizeScannedCode,
   parseCountQuantity,
@@ -214,45 +214,22 @@ describe('describePalletLookupFailure', () => {
   })
 })
 
-describe('describeScanMultiplier', () => {
-  const messages = {
-    each: 'Each scan counts 1',
-    armed: (quantity: string) => `Next scan counts ${quantity}`,
-    invalid: 'Enter a quantity greater than 0',
-  }
-
-  it('says a scan counts one while the field is untouched', () => {
-    // The camera's ordinary case. Anything louder than this would cry wolf on every pallet.
-    expect(describeScanMultiplier('', messages)).toEqual({
-      kind: 'default',
-      message: 'Each scan counts 1',
-    })
-    expect(describeScanMultiplier('   ', messages)).toEqual({
-      kind: 'default',
-      message: 'Each scan counts 1',
-    })
+describe('adjustScanQuantity', () => {
+  it('steps by one in both directions', () => {
+    expect(adjustScanQuantity(1, 1)).toBe(2)
+    expect(adjustScanQuantity(12, -1)).toBe(11)
   })
 
-  it('names an armed multiplier back, because forgetting one over-counts silently', () => {
-    expect(describeScanMultiplier('24', messages)).toEqual({
-      kind: 'armed',
-      message: 'Next scan counts 24',
-    })
+  it('steps by ten, so a pallet of forty-eight is not forty-seven taps', () => {
+    expect(adjustScanQuantity(1, 10)).toBe(11)
+    expect(adjustScanQuantity(48, -10)).toBe(38)
   })
 
-  it('reads the multiplier back the way somebody counting writes it', () => {
-    // `parseCountQuantity` canonicalises to storage precision. "2.5000" is a column, not an
-    // answer to the person holding the carton.
-    expect(describeScanMultiplier('2,5', messages).message).toBe('Next scan counts 2.5')
-  })
-
-  it('refuses a non-quantity before a scan is spent on it', () => {
-    // Without this the operator learns their typo from a failed scan — a carton presented,
-    // a refusal, and a count they have to redo.
-    expect(describeScanMultiplier('abc', messages)).toEqual({
-      kind: 'invalid',
-      message: 'Enter a quantity greater than 0',
-    })
-    expect(describeScanMultiplier('0', messages).kind).toBe('invalid')
+  it('never goes below one, because a scan asserts the product is on the pallet', () => {
+    // −10 from 3 is the ordinary way to reach this: the floor overshot and is coming back
+    // down. Landing on 0 or −7 would offer a count the server is bound to refuse.
+    expect(adjustScanQuantity(3, -10)).toBe(1)
+    expect(adjustScanQuantity(1, -1)).toBe(1)
+    expect(adjustScanQuantity(1, -10)).toBe(1)
   })
 })

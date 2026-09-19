@@ -86,33 +86,20 @@ export type BarcodeScannerDialogProps = {
    */
   log?: ScannerLogEntry[]
   /**
-   * Current value of the optional field rendered beside the preview, for a
-   * caller that attaches a number to each scan rather than treating a scan as
-   * one of something.
+   * A step the caller needs answered before scanning may continue — rendered
+   * in place of the preview and the manual-entry field, filling the dialog.
    *
-   * The dialog never parses or defaults this — it is the caller's string,
-   * echoed back through `onQuantityChange`. What a blank means, what is a
-   * valid amount and what an armed one implies are all domain questions the
-   * scanner has no business answering; it only makes the field reachable
-   * while the camera holds the screen.
+   * While this is non-null **no scan is accepted**, and the repeat-rule state
+   * is frozen rather than advanced: neither a decode nor an empty frame is
+   * observed, exactly as while `busy`. That is what makes the step safe to
+   * leave up. Without the freeze, a carton still sitting in front of the lens
+   * when the step closes would be read as a second carton, and lowering the
+   * device mid-step would clear the "already counted this one" memory.
    *
-   * The whole group renders only when `onQuantityChange` is supplied, so
-   * every existing call site is untouched.
+   * The dialog does not know what is being asked. It owns only the rule that
+   * nothing is scanned while something is.
    */
-  quantity?: string
-  /** Receives every keystroke in the quantity field. Its presence renders the field. */
-  onQuantityChange?: (value: string) => void
-  /** Field label. Already-translated, like `manualLabel`. */
-  quantityLabel?: string
-  /** Field placeholder. Already-translated. */
-  quantityPlaceholder?: string
-  /**
-   * Line under the field describing what the current value means for the next
-   * scan. A live region, because it changes without the operator looking.
-   */
-  quantityHint?: string
-  /** How loudly the hint reads. `notice` is for a value that is not the default. */
-  quantityHintTone?: 'neutral' | 'notice' | 'error'
+  interruption?: React.ReactNode
 }
 
 /** Poll cadence for `detect()`. 100ms keeps mobile CPUs (and battery) sane. */
@@ -204,12 +191,7 @@ export function BarcodeScannerDialog({
   manualPlaceholder,
   continuous = false,
   log,
-  quantity = '',
-  onQuantityChange,
-  quantityLabel,
-  quantityPlaceholder,
-  quantityHint,
-  quantityHintTone = 'neutral',
+  interruption = null,
 }: BarcodeScannerDialogProps): React.JSX.Element | null {
   const t = useT()
 
@@ -228,6 +210,9 @@ export function BarcodeScannerDialog({
   // from inside the poll loop through refs so neither re-runs the start effect.
   const busyRef = React.useRef(busy)
   const continuousRef = React.useRef(continuous)
+  // Same reason as `busy`: the step goes up and comes down on every counted item, and
+  // re-running the start effect would restart the camera once per carton.
+  const interruptedRef = React.useRef(interruption != null)
 
   const [attempt, setAttempt] = React.useState(0)
   const [starting, setStarting] = React.useState(false)
@@ -249,6 +234,10 @@ export function BarcodeScannerDialog({
   React.useEffect(() => {
     continuousRef.current = continuous
   }, [continuous])
+
+  React.useEffect(() => {
+    interruptedRef.current = interruption != null
+  }, [interruption])
 
   const clearFlash = React.useCallback(() => {
     if (flashTimeoutRef.current !== null) {
@@ -317,6 +306,10 @@ export function BarcodeScannerDialog({
       const detector = detectorRef.current
       if (!video || !detector) return
       if (detectingRef.current || firedRef.current) return
+      // Before the frame is even read: while a step is open the stream is frozen, so an
+      // empty frame cannot clear the memory of the carton that opened it. Lowering the
+      // device to tap `+10` must not turn that same carton into a second one.
+      if (interruptedRef.current) return
       // HAVE_CURRENT_DATA — nothing decodable before the first frame lands.
       if (video.readyState < 2) return
       detectingRef.current = true
@@ -454,10 +447,13 @@ export function BarcodeScannerDialog({
 
   const submitManual = React.useCallback(() => {
     if (busy) return
+    // The step owns the dialog while it is up, including its Cmd/Ctrl+Enter. Typing a code
+    // past an unanswered question is the one thing the interruption exists to prevent.
+    if (interruption != null) return
     const trimmed = manualValue.trim()
     if (!trimmed) return
     onDetectedRef.current(trimmed)
-  }, [busy, manualValue])
+  }, [busy, interruption, manualValue])
 
   const handleDialogKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -540,13 +536,8 @@ export function BarcodeScannerDialog({
   if (!open) return null
 
   const manualInputId = 'barcode-scanner-manual-entry'
-  const quantityInputId = 'barcode-scanner-quantity'
   const manualDisabled = busy || manualValue.trim().length === 0
-  const quantityHintClass = quantityHintTone === 'error'
-    ? 'text-status-error-text'
-    : quantityHintTone === 'notice'
-      ? 'text-status-warning-text'
-      : 'text-muted-foreground'
+  const interrupted = interruption != null
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -559,7 +550,7 @@ export function BarcodeScannerDialog({
           <DialogDescription>{labels.description}</DialogDescription>
         </DialogHeader>
 
-        {cameraErrorCopy ? (
+        {cameraErrorCopy && !interrupted ? (
           <Alert
             status="error"
             size="default"
@@ -575,10 +566,13 @@ export function BarcodeScannerDialog({
           </Alert>
         ) : null}
 
+        {/* Hidden while a step is up, never unmounted: the <video> element holds the live
+            MediaStream, so dropping it would stop the camera and make every counted item
+            pay a fresh getUserMedia start. */}
         <div
           className={cn(
             'relative w-full overflow-hidden rounded-md border border-input bg-muted aspect-video',
-            cameraErrorCopy ? 'hidden' : '',
+            cameraErrorCopy || interrupted ? 'hidden' : '',
           )}
         >
           <video
@@ -616,7 +610,9 @@ export function BarcodeScannerDialog({
           ) : null}
         </div>
 
-        {continuous && !cameraErrorCopy ? (
+        {interrupted ? interruption : null}
+
+        {continuous && !cameraErrorCopy && !interrupted ? (
           <p className="text-sm text-muted-foreground">
             {t(
               'barcodeScanner.scanner.continuousHint',
@@ -625,39 +621,7 @@ export function BarcodeScannerDialog({
           </p>
         ) : null}
 
-        {/* Directly under the preview: the value is armed here and fires at the pallet, so
-            it has to be readable in the same glance as the video rather than scrolled to. */}
-        {onQuantityChange ? (
-          <div className="flex flex-col gap-2">
-            <Label htmlFor={quantityInputId}>{quantityLabel}</Label>
-            <Input
-              id={quantityInputId}
-              value={quantity}
-              onChange={(event) => onQuantityChange(event.target.value)}
-              inputMode="decimal"
-              autoComplete="off"
-              disabled={busy}
-              placeholder={quantityPlaceholder}
-              className="h-14"
-              inputClassName="h-full text-base"
-              aria-describedby={quantityHint ? `${quantityInputId}-hint` : undefined}
-            />
-            {quantityHint ? (
-              // Announced, not just shown: the operator's eyes are on the pallet and the
-              // only thing distinguishing "counts 1" from "counts 24" is this line.
-              <span
-                id={`${quantityInputId}-hint`}
-                role="status"
-                aria-live="polite"
-                className={cn('text-sm', quantityHintClass)}
-              >
-                {quantityHint}
-              </span>
-            ) : null}
-          </div>
-        ) : null}
-
-        {!cameraErrorCopy && (torchSupported || captured) ? (
+        {!cameraErrorCopy && !interrupted && (torchSupported || captured) ? (
           <div className="flex flex-wrap items-center gap-2">
             {torchSupported ? (
               <Button type="button" variant="outline" onClick={handleToggleTorch} aria-pressed={torchOn}>
@@ -676,7 +640,7 @@ export function BarcodeScannerDialog({
           </div>
         ) : null}
 
-        {visibleLog.length > 0 ? (
+        {visibleLog.length > 0 && !interrupted ? (
           // A live region, because the confirmation has to reach someone whose
           // eyes are on the pallet and someone using a screen reader alike.
           <section
@@ -715,7 +679,7 @@ export function BarcodeScannerDialog({
           </section>
         ) : null}
 
-        {statusMessage ? (
+        {statusMessage && !interrupted ? (
           <Alert status="information" aria-live="polite">
             <AlertDescription className="flex items-center gap-2">
               {busy ? <Spinner size="sm" /> : null}
@@ -724,13 +688,17 @@ export function BarcodeScannerDialog({
           </Alert>
         ) : null}
 
-        {errorMessage ? (
+        {/* An interruption is a whole surface, not a panel among others: while one is up it
+            owns the refusal too, so the caller is not made to render the same text twice. */}
+        {errorMessage && !interrupted ? (
           <Alert status="error">
             <AlertDescription>{errorMessage}</AlertDescription>
           </Alert>
         ) : null}
 
-        <div className="flex flex-col gap-2">
+        {/* Typing a code is another way to scan, so it goes away with the camera while a
+            step is unanswered — otherwise the one rule this step enforces has a back door. */}
+        <div className={cn('flex flex-col gap-2', interrupted ? 'hidden' : '')}>
           <Label htmlFor={manualInputId}>{labels.manualLabel}</Label>
           <div className="flex items-center gap-2">
             <Input
@@ -750,7 +718,7 @@ export function BarcodeScannerDialog({
           </div>
         </div>
 
-        {continuous ? (
+        {continuous && !interrupted ? (
           // Nothing else ends a counting session: the dialog no longer closes
           // itself on a decode. Sized for a gloved thumb on a phone.
           <Button type="button" onClick={onClose} className="h-16 w-full text-base">
