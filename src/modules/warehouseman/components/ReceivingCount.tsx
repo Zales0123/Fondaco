@@ -116,12 +116,30 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
   const scannerOpenRef = React.useRef(false)
   const logSequence = React.useRef(0)
 
-  // Creating a pallet prints its label and then opens the pallet, so the outcome of that
-  // print is waiting here. Reading it consumes it: coming back to this pallet later must
-  // not resurrect what the printer did half an hour ago.
+  // Creating a pallet starts its label print and opens the pallet without waiting, so what
+  // is waiting here is usually a print still in flight. Reading it consumes it: coming back
+  // to this pallet later must not resurrect what the printer did half an hour ago.
+  //
+  // The screen reports it exactly as it reports a reprint — the same spinner on the button,
+  // the same notice underneath — so the warehouseman sees one behaviour whichever way the
+  // print started.
   React.useEffect(() => {
     const carried = takePalletLabelNotice(palletId)
-    if (carried) setLabelNotice({ ...carried, palletId })
+    if (!carried) return
+
+    let abandoned = false
+    setPrinting(true)
+    carried.then((notice) => {
+      // The print outlives the screen when the warehouseman moves on; the mailbox already
+      // consumed it, so there is nothing to put back and nothing to report.
+      if (abandoned) return
+      setLabelNotice({ ...notice, palletId })
+      setPrinting(false)
+    })
+
+    return () => {
+      abandoned = true
+    }
   }, [palletId])
 
   const document = useQuery<ReceivingDocument | null>({

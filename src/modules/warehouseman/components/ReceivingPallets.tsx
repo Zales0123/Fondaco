@@ -26,13 +26,12 @@ import {
 } from '../lib/receivingApi'
 import {
   describePalletLookupFailure,
-  describePalletPrintOutcome,
   normalizeScannedCode,
   receivingPalletHref,
   receivingSummaryHref,
   RECEIVING_LIST_HREF,
 } from '../lib/receivingPanel'
-import { stashPalletLabelNotice } from '../lib/palletLabelNotice'
+import { startPalletLabelPrint } from '../lib/palletLabelNotice'
 
 const PALLET_STATUS_VARIANTS: Record<PalletStatus, StatusBadgeVariant> = {
   open: 'info',
@@ -71,31 +70,19 @@ export function ReceivingPallets({ receiptId }: ReceivingPalletsProps) {
   })
 
   const create = useMutation({
-    mutationFn: async () => {
-      const pallet = await createPallet(receiptId)
-      // Printing is a post-commit effect. From this line on the pallet exists whatever the
-      // printer does, so a printer that is off, busy or unreachable is captured rather than
-      // thrown: it must never be reported as a failed pallet, and it must never stop the
-      // warehouseman from landing inside the pallet they just made.
-      try {
-        await printPalletLabel(pallet.id)
-        return { pallet, printFailure: null as unknown }
-      } catch (printFailure) {
-        return { pallet, printFailure }
-      }
-    },
-    onSuccess: ({ pallet, printFailure }) => {
-      // The reprint button lives on the pallet screen, which is where this navigation ends,
-      // so the outcome travels with it instead of flashing on a screen nobody stays on.
-      stashPalletLabelNotice(
-        pallet.id,
-        describePalletPrintOutcome(printFailure, {
-          success: t('warehouseman.receiving.pallets.print.success'),
-          failure: (reason) => t('warehouseman.receiving.pallets.print.failed', undefined, { reason }),
-          unknownReason: t('warehouseman.receiving.print.unknownReason'),
-          timedOutReason: t('warehouseman.receiving.print.timedOut'),
-        }),
-      )
+    mutationFn: () => createPallet(receiptId),
+    onSuccess: (pallet) => {
+      // Printing is a post-commit effect and is never waited for. The pallet exists the
+      // moment the command returns, so the warehouseman goes straight into it while the
+      // label is still coming out — a B1 takes tens of seconds, and a printer that is off
+      // takes until the request's own bound gives up. The outcome follows them into the
+      // pallet, which is where the reprint button lives.
+      startPalletLabelPrint(pallet.id, printPalletLabel, {
+        success: t('warehouseman.receiving.pallets.print.success'),
+        failure: (reason) => t('warehouseman.receiving.pallets.print.failed', undefined, { reason }),
+        unknownReason: t('warehouseman.receiving.print.unknownReason'),
+        timedOutReason: t('warehouseman.receiving.print.timedOut'),
+      })
       queryClient.invalidateQueries({ queryKey: ['warehouseman.receiving.pallets', receiptId] })
       router.push(receivingPalletHref(receiptId, pallet.id))
     },
