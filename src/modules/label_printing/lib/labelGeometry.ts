@@ -8,7 +8,8 @@
  * Width is capped by the head at 400 dots; height is free (a u16 in the page
  * -size packet), so it is bounded only by the stock. Both are configurable
  * because the installed label stock is a property of the deployment, not of
- * the protocol.
+ * the protocol — `labelPrinterSettings.ts` is what resolves them, from the
+ * integration's settings tab over the `NIIMBOT_LABEL_*` preset.
  */
 export type LabelGeometry = {
   width: number
@@ -20,16 +21,3 @@ export const DEFAULT_LABEL_GEOMETRY: LabelGeometry = {
   height: 230,
 }
 
-function readIntEnv(name: string, fallback: number): number {
-  const raw = process.env[name]
-  if (!raw) return fallback
-  const parsed = Number.parseInt(raw, 10)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
-}
-
-export function readLabelGeometry(): LabelGeometry {
-  return {
-    width: readIntEnv('NIIMBOT_LABEL_WIDTH', DEFAULT_LABEL_GEOMETRY.width),
-    height: readIntEnv('NIIMBOT_LABEL_HEIGHT', DEFAULT_LABEL_GEOMETRY.height),
-  }
-}

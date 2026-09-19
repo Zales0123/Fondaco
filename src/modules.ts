@@ -25,6 +25,10 @@ export const enabledModules: ModuleEntry[] = [
   { id: 'sales', from: '@open-mercato/core' },
   { id: 'wms', from: '@open-mercato/core' },
   { id: 'currencies', from: '@open-mercato/core' },
+  // Hosts the printer's settings tab. `label_printing` declares an `integration.ts`, and
+  // this module is what renders it, stores its credentials encrypted and runs its health
+  // check — so it must come before the module that registers into it.
+  { id: 'integrations', from: '@open-mercato/core' },
   { id: 'label_printing', from: '@app' },
   // Backfills demo GTINs onto the variants catalog's own seedExamples creates
   // (it sets none). Must come after `catalog` so the variants exist.

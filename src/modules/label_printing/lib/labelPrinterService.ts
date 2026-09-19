@@ -6,10 +6,11 @@
  * serial port, and turning low-level failures into codes the route can map to
  * HTTP statuses.
  */
-import { printRasterizedImage, PrinterError, DEFAULT_JOB_TIMEOUT_MS } from './niimbotPrinter'
+import { printRasterizedImage, PrinterError } from './niimbotPrinter'
 import { rasterizeImage, RasterizeError } from './rasterize'
 import { createExclusiveRunner, PrinterBusyError, type ExclusiveRunner } from './printQueue'
 import { openSerialTransport } from './serialTransport'
+import type { LabelPrinterSettings } from './labelPrinterSettings'
 import type { SerialTransportFactory } from './types'
 
 export class PrinterUnavailableError extends Error {
@@ -20,29 +21,6 @@ export class PrinterUnavailableError extends Error {
   }
 }
 
-export type LabelPrinterConfig = {
-  /** Serial device the printer is paired on, e.g. `/dev/tty.B1-XXXXXXXX`. */
-  portPath: string | null
-  density: number
-  labelType: number
-  jobTimeoutMs?: number
-  /**
-   * How long to wait for the serial port to open before giving up.
-   *
-   * Separate from `jobTimeoutMs` because it maps to a different answer: failing
-   * here means the printer was never reached (503), while failing later means a
-   * job that started and stalled (502).
-   */
-  openTimeoutMs?: number
-  /**
-   * How long to wait for the serial port to close before abandoning the handle.
-   *
-   * Closing is not a formality here: it is the same handle the job wedged on.
-   * `port.close()` drains pending output, so on a stalled link it can block in
-   * exactly the place the write did — and it runs inside the printer lock.
-   */
-  closeTimeoutMs?: number
-}
 
 /**
  * Deliberately generous. This timer exists to stop an infinite wedge, not to
@@ -75,7 +53,7 @@ export const DEFAULT_CLOSE_TIMEOUT_MS = 5_000
  * still produce something that holds a resource, `onAbandoned` is how the
  * caller disposes of it once it finally arrives.
  */
-async function withDeadline<T>(
+export async function withDeadline<T>(
   timeoutMs: number,
   work: () => Promise<T>,
   onTimeout: () => Error,
@@ -107,29 +85,50 @@ async function withDeadline<T>(
 }
 
 export type LabelPrinterService = {
-  isConfigured: () => boolean
-  printImage: (source: Buffer) => Promise<void>
+  printImage: (source: Buffer, settings: LabelPrinterSettings) => Promise<void>
 }
 
+/**
+ * The settings are passed per call, not held.
+ *
+ * They are resolved from a tenant-scoped, asynchronously read credentials store, while
+ * this service is a process-wide singleton because it guards one physical device. Holding
+ * them would freeze whichever tenant happened to construct it first, and the lock must
+ * stay shared across all of them.
+ */
 export function createLabelPrinterService(deps: {
-  config: LabelPrinterConfig
   openTransport?: SerialTransportFactory
   runExclusive?: ExclusiveRunner
+  /**
+   * How long to wait for the serial port to open before giving up.
+   *
+   * Separate from the job bound because it maps to a different answer: failing
+   * here means the printer was never reached (503), while failing later means a
+   * job that started and stalled (502).
+   */
+  openTimeoutMs?: number
+  /**
+   * How long to wait for the serial port to close before abandoning the handle.
+   *
+   * Closing is not a formality here: it is the same handle the job wedged on.
+   * `port.close()` drains pending output, so on a stalled link it can block in
+   * exactly the place the write did — and it runs inside the printer lock.
+   */
+  closeTimeoutMs?: number
 }): LabelPrinterService {
   const {
-    config,
     openTransport = (portPath) => openSerialTransport(portPath),
     runExclusive = createExclusiveRunner(),
+    openTimeoutMs = DEFAULT_OPEN_TIMEOUT_MS,
+    closeTimeoutMs = DEFAULT_CLOSE_TIMEOUT_MS,
   } = deps
 
   return {
-    isConfigured: () => Boolean(config.portPath),
-
-    async printImage(source) {
-      const portPath = config.portPath
+    async printImage(source, settings) {
+      const portPath = settings.portPath
       if (!portPath) {
         throw new PrinterUnavailableError(
-          'No label printer configured; set NIIMBOT_SERIAL_PORT',
+          'No label printer configured; set a serial port in the integration settings',
         )
       }
 
@@ -137,9 +136,9 @@ export function createLabelPrinterService(deps: {
       // without locking out a concurrent, valid job.
       const image = await rasterizeImage(source)
 
-      const openTimeoutMs = config.openTimeoutMs ?? DEFAULT_OPEN_TIMEOUT_MS
-      const jobTimeoutMs = config.jobTimeoutMs ?? DEFAULT_JOB_TIMEOUT_MS
-      const closeTimeoutMs = config.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS
+      // The one bound an operator can change; the open and close bounds are
+      // safety rails on the transport rather than anything the tab exposes.
+      const jobTimeoutMs = settings.jobTimeoutMs
 
       return runExclusive(async () => {
         let transport
@@ -166,8 +165,8 @@ export function createLabelPrinterService(deps: {
               printRasterizedImage({
                 transport,
                 image,
-                density: config.density,
-                labelType: config.labelType,
+                density: settings.density,
+                labelType: settings.labelType,
                 jobTimeoutMs,
               }),
             () =>

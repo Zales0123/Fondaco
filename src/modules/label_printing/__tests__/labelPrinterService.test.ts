@@ -8,28 +8,28 @@ import {
 import { PrinterBusyError } from '../lib/printQueue'
 import { RasterizeError } from '../lib/rasterize'
 import { createFakePrinter } from '../testing/fakeSerialTransport'
+import type { LabelPrinterSettings } from '../lib/labelPrinterSettings'
 import type { SerialTransport } from '../lib/types'
 
 const assetPath = path.join(__dirname, 'fixtures', 'barcode.gif')
-const config = { portPath: '/dev/tty.fake', density: 3, labelType: 1, jobTimeoutMs: 10_000 }
+const settings: LabelPrinterSettings = {
+  portPath: '/dev/tty.fake',
+  density: 3,
+  labelType: 1,
+  jobTimeoutMs: 10_000,
+  geometry: { width: 384, height: 230 },
+}
 
 function serviceWith(openTransport: (portPath: string) => Promise<SerialTransport>) {
-  return createLabelPrinterService({ config, openTransport })
+  return createLabelPrinterService({ openTransport })
 }
 
 describe('createLabelPrinterService', () => {
-  it('reports whether a printer is configured', () => {
-    expect(serviceWith(async () => createFakePrinter().transport).isConfigured()).toBe(true)
-    expect(
-      createLabelPrinterService({ config: { ...config, portPath: null } }).isConfigured(),
-    ).toBe(false)
-  })
-
   it('prints the label and always closes the port', async () => {
     const printer = createFakePrinter()
     const service = serviceWith(async () => printer.transport)
 
-    await service.printImage(await readFile(assetPath))
+    await service.printImage(await readFile(assetPath), settings)
 
     expect(printer.received.length).toBeGreaterThan(0)
     expect(printer.closed).toBe(true)
@@ -41,22 +41,22 @@ describe('createLabelPrinterService', () => {
     })
     const service = serviceWith(async () => printer.transport)
 
-    await expect(service.printImage(await readFile(assetPath))).rejects.toThrow(/error 9/)
+    await expect(service.printImage(await readFile(assetPath), settings)).rejects.toThrow(/error 9/)
     expect(printer.closed).toBe(true)
   })
 
   it('refuses to print when no port is configured', async () => {
-    const service = createLabelPrinterService({ config: { ...config, portPath: null } })
-    await expect(service.printImage(await readFile(assetPath))).rejects.toBeInstanceOf(
-      PrinterUnavailableError,
-    )
+    const service = createLabelPrinterService({})
+    await expect(
+      service.printImage(await readFile(assetPath), { ...settings, portPath: null }),
+    ).rejects.toBeInstanceOf(PrinterUnavailableError)
   })
 
   it('maps a failure to open the port to printer-unavailable', async () => {
     const service = serviceWith(async () => {
       throw new Error('Resource busy, cannot open /dev/tty.fake')
     })
-    await expect(service.printImage(await readFile(assetPath))).rejects.toMatchObject({
+    await expect(service.printImage(await readFile(assetPath), settings)).rejects.toMatchObject({
       code: 'printer-unavailable',
     })
   })
@@ -80,13 +80,13 @@ describe('createLabelPrinterService', () => {
     })
 
     const image = await readFile(assetPath)
-    const first = service.printImage(image)
+    const first = service.printImage(image, settings)
     // The lock is claimed only after rasterizing, which decodes the image on a
     // native thread. Yielding a fixed number of ticks would not get the first
     // job there; wait for it to actually hold the lock, or the two jobs race
     // and the second one can win.
     await locked
-    const second = service.printImage(image)
+    const second = service.printImage(image, settings)
 
     await expect(second).rejects.toBeInstanceOf(PrinterBusyError)
     release!()
@@ -97,8 +97,8 @@ describe('createLabelPrinterService', () => {
     const service = serviceWith(async () => createFakePrinter().transport)
     const image = await readFile(assetPath)
 
-    await service.printImage(image)
-    await expect(service.printImage(image)).resolves.toBeUndefined()
+    await service.printImage(image, settings)
+    await expect(service.printImage(image, settings)).resolves.toBeUndefined()
   })
 
   it('rejects a bad image without ever opening the port', async () => {
@@ -110,7 +110,7 @@ describe('createLabelPrinterService', () => {
       return createFakePrinter().transport
     })
 
-    await expect(service.printImage(tooWide)).rejects.toBeInstanceOf(RasterizeError)
+    await expect(service.printImage(tooWide, settings)).rejects.toBeInstanceOf(RasterizeError)
     expect(opened).toBe(false)
   })
 
@@ -121,11 +121,11 @@ describe('createLabelPrinterService', () => {
    */
   it('rejects instead of hanging when the port never opens', async () => {
     const service = createLabelPrinterService({
-      config: { ...config, openTimeoutMs: 20 },
+      openTimeoutMs: 20,
       openTransport: () => new Promise<SerialTransport>(() => {}),
     })
 
-    await expect(service.printImage(await readFile(assetPath))).rejects.toMatchObject({
+    await expect(service.printImage(await readFile(assetPath), settings)).rejects.toMatchObject({
       code: 'printer-unavailable',
     })
   })
@@ -133,7 +133,6 @@ describe('createLabelPrinterService', () => {
   it('rejects instead of hanging when a write never completes', async () => {
     const printer = createFakePrinter()
     const service = createLabelPrinterService({
-      config: { ...config, jobTimeoutMs: 20 },
       openTransport: async () => ({
         write: () => new Promise<void>(() => {}),
         onData: (listener) => printer.transport.onData(listener),
@@ -141,7 +140,9 @@ describe('createLabelPrinterService', () => {
       }),
     })
 
-    await expect(service.printImage(await readFile(assetPath))).rejects.toMatchObject({
+    await expect(
+      service.printImage(await readFile(assetPath), { ...settings, jobTimeoutMs: 20 }),
+    ).rejects.toMatchObject({
       code: 'printer-timeout',
     })
     expect(printer.closed).toBe(true)
@@ -156,9 +157,6 @@ describe('createLabelPrinterService', () => {
     const working = createFakePrinter()
     let stall = true
     const service = createLabelPrinterService({
-      // One bound covers both legs: tight enough that the stall fails fast,
-      // wide enough that the real print behind it is not racing the clock.
-      config: { ...config, jobTimeoutMs: 250 },
       openTransport: async () => {
         if (!stall) return working.transport
         return {
@@ -169,11 +167,14 @@ describe('createLabelPrinterService', () => {
       },
     })
     const image = await readFile(assetPath)
+    // One bound covers both legs: tight enough that the stall fails fast,
+    // wide enough that the real print behind it is not racing the clock.
+    const impatient = { ...settings, jobTimeoutMs: 250 }
 
-    await expect(service.printImage(image)).rejects.toMatchObject({ code: 'printer-timeout' })
+    await expect(service.printImage(image, impatient)).rejects.toMatchObject({ code: 'printer-timeout' })
 
     stall = false
-    await expect(service.printImage(image)).resolves.toBeUndefined()
+    await expect(service.printImage(image, impatient)).resolves.toBeUndefined()
     expect(working.received.length).toBeGreaterThan(0)
   })
 
@@ -187,7 +188,7 @@ describe('createLabelPrinterService', () => {
     const working = createFakePrinter()
     let wedged = true
     const service = createLabelPrinterService({
-      config: { ...config, jobTimeoutMs: 250, closeTimeoutMs: 20 },
+      closeTimeoutMs: 20,
       openTransport: async () => {
         if (!wedged) return working.transport
         return {
@@ -198,11 +199,12 @@ describe('createLabelPrinterService', () => {
       },
     })
     const image = await readFile(assetPath)
+    const impatient = { ...settings, jobTimeoutMs: 250 }
 
-    await expect(service.printImage(image)).rejects.toMatchObject({ code: 'printer-timeout' })
+    await expect(service.printImage(image, impatient)).rejects.toMatchObject({ code: 'printer-timeout' })
 
     wedged = false
-    await expect(service.printImage(image)).resolves.toBeUndefined()
+    await expect(service.printImage(image, impatient)).resolves.toBeUndefined()
     expect(working.received.length).toBeGreaterThan(0)
   })
 
@@ -214,14 +216,14 @@ describe('createLabelPrinterService', () => {
   it('closes a port that finishes opening after the deadline', async () => {
     const late = createFakePrinter()
     const service = createLabelPrinterService({
-      config: { ...config, openTimeoutMs: 20 },
+      openTimeoutMs: 20,
       openTransport: () =>
         new Promise<SerialTransport>((resolve) => {
           setTimeout(() => resolve(late.transport), 60)
         }),
     })
 
-    await expect(service.printImage(await readFile(assetPath))).rejects.toMatchObject({
+    await expect(service.printImage(await readFile(assetPath), settings)).rejects.toMatchObject({
       code: 'printer-unavailable',
     })
 

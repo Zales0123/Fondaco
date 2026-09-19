@@ -5,7 +5,7 @@ import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { createLogger } from '@open-mercato/shared/lib/logger'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import type { OpenApiMethodDoc, OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
-import { LABEL_PRINTER_SERVICE } from '../../di'
+import { LABEL_PRINTER_SERVICE, LABEL_PRINTER_SETTINGS, type LabelPrinterSettingsResolver } from '../../di'
 import {
   PrinterUnavailableError,
   type LabelPrinterService,
@@ -14,7 +14,6 @@ import { PrinterBusyError } from '../../lib/printQueue'
 import { PrinterError } from '../../lib/niimbotPrinter'
 import { RasterizeError } from '../../lib/rasterize'
 import { BarcodeRenderError, renderBarcodeLabel } from '../../lib/barcodeImage'
-import { readLabelGeometry } from '../../lib/labelGeometry'
 import {
   LABEL_SCOPE_IDS,
   LabelNotAvailableError,
@@ -133,14 +132,21 @@ export async function POST(request: Request) {
       organizationId: auth.orgId,
     })
 
+    // Resolved once and used twice: the geometry the label is drawn onto and the
+    // printer it is sent to have to come from the same answer, or a tab that changed
+    // the stock would render at one size and print at another.
+    const settings = await container
+      .resolve<LabelPrinterSettingsResolver>(LABEL_PRINTER_SETTINGS)
+      .resolve({ tenantId: auth.tenantId, organizationId: auth.orgId })
+
     const image = await renderBarcodeLabel({
       symbology: subject.symbology,
       value: subject.value,
-      geometry: readLabelGeometry(),
+      geometry: settings.geometry,
     })
 
     const printer = container.resolve<LabelPrinterService>(LABEL_PRINTER_SERVICE)
-    await printer.printImage(image)
+    await printer.printImage(image, settings)
 
     logger.info('Printed label', {
       scope: parsed.data.scope,
