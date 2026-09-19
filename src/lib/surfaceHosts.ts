@@ -196,8 +196,9 @@ export type SearchParamsInput = Record<string, string | string[] | undefined>
  * Renders a page's `searchParams` back into a query string, leading `?` included.
  *
  * A page's own `searchParams` is the only way a server component can see the query: the
- * request headers do not carry it (`x-next-url` is the pathname alone), so a guard that
- * read headers would quietly drop `?page=2` from every redirect it issued.
+ * request headers do not carry it, because `src/proxy.ts` sets `x-next-url` to
+ * `req.nextUrl.pathname` and the query never survives. A guard that read headers instead
+ * would quietly drop `?page=2` from every redirect it issued.
  */
 export function formatSearch(searchParams: SearchParamsInput | undefined): string {
   if (!searchParams) return ''

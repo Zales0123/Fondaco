@@ -34,18 +34,22 @@ problem and not a deployment's.
   `@open-mercato/shared/lib/url.ts` (exact origins, wildcards dropped). Only the exact origin
   satisfies both. `readSurfaceHostConfig` throws when it is missing, because the failure it
   prevents — a split everyone believes in that does not exist — is invisible from the outside.
-- Enforcement lives at the surface entry points, not in a root middleware:
-  `src/app/(backend)/backend/page.tsx`, `src/app/(backend)/backend/[...slug]/page.tsx`,
-  `src/app/(frontend)/[...slug]/page.tsx` and `src/app/login/page.tsx`, each one line calling
-  `enforceSurfaceHost`. Next inlines `process.env` into Edge middleware at build time, and this
-  app ships a Docker image built once and configured per deployment, so a middleware would have
-  read the build's environment and not the deployment's. Server components read the environment
-  at request time.
+- Enforcement lives at the surface entry points — `src/app/(backend)/backend/page.tsx`,
+  `src/app/(backend)/backend/[...slug]/page.tsx`, `src/app/(frontend)/[...slug]/page.tsx` and
+  `src/app/login/page.tsx` — each one line calling `enforceSurfaceHost`. The app does have an Edge
+  middleware, `src/proxy.ts` (Next 16's rename of `middleware.ts`), and it is deliberately not the
+  place for this: Next inlines `process.env` into the Edge bundle at build time, while this app
+  ships an image built once and configured per deployment, so the guard would have read the
+  build's environment rather than the deployment's. `src/proxy.ts` keeps itself free of anything
+  needing runtime configuration for the same family of reasons. Server components read the
+  environment per request.
 - The guards sit on the page components rather than on `backend/layout.tsx`, which would have been
   one site instead of two. Only a page is handed `searchParams`, and the request headers do not
-  carry the query — `x-next-url` is the pathname alone — so a layout-level guard dropped `?page=2`
-  from every redirect it issued. Preserving the request the user actually made was worth the
-  second call site.
+  carry the query: `src/proxy.ts` sets `x-next-url` to `req.nextUrl.pathname`, dropping the query
+  before any layout can see it. A layout-level guard therefore dropped `?page=2` from every
+  redirect it issued. Preserving the request the user actually made was worth the second call
+  site. Widening `x-next-url` to carry the query was rejected as changing a header other code
+  already reads for its own purposes.
 - `/login` pins `dynamic = 'force-dynamic'`. It already rendered on demand, so this costs nothing;
   it states the requirement instead of inheriting it. The guard must run on every request and must
   not be made conditional on the split being configured, because the image is built once and
