@@ -80,6 +80,23 @@ export function formatCountQuantity(raw: string): string {
   return raw.replace(/\.?0+$/, '') || '0'
 }
 
+/** The smallest a confirmed scan can be: the scan itself asserts the product is there. */
+export const MIN_SCAN_QUANTITY = 1
+
+/**
+ * Moves the pending scan's quantity by one of the step buttons.
+ *
+ * Clamping at one rather than zero is the whole reason this is a function. Coming back down
+ * from an overshoot with −10 is ordinary — the floor taps `+10` twice, sees 21, and corrects —
+ * and landing on 0 or −7 would put a count on screen that the server is bound to refuse,
+ * discovered only after the button is pressed. A gloved thumb overshooting is expected input,
+ * not a mistake to punish.
+ */
+export function adjustScanQuantity(current: number, delta: number): number {
+  return Math.max(MIN_SCAN_QUANTITY, current + delta)
+}
+
+
 /**
  * Every `pz` refusal carries an already-localized `error`. Printing it is the only way the
  * panel can name the other document a scanned pallet belongs to, so the caller's own key is

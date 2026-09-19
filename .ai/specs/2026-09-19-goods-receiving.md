@@ -292,6 +292,24 @@ scanner dialog in continuous mode:
   └────────────────────────────────────────────┘
 ```
 
+An accepted scan replaces all of that with the quantity step until it is answered — the camera
+keeps running underneath, but nothing is scanned past it:
+
+```text
+  ┌────────────────────────────────────────────┐
+  │ Skanuj towary                              │
+  │ Kabel USB-C 2m                             │
+  │ 5901234123457                              │
+  │                                            │
+  │  ┌────┐ ┌───┐ ┌──────┐ ┌───┐ ┌────┐        │
+  │  │ −10│ │ − │ │  12  │ │ + │ │ +10│        │
+  │  └────┘ └───┘ └──────┘ └───┘ └────┘        │
+  │                 ↑ można też wpisać          │
+  │ [              Dodaj 12                  ] │
+  │ [               Anuluj                   ] │
+  └────────────────────────────────────────────┘
+```
+
 - **Behavior:** a barcode reaches the count through three routes that end in the same call — a
   handheld wedge scanner typing into the field and ending with Enter, a code typed by hand, and the
   camera. The code resolves to a variant and the quantity is added to the (Pallet, variant) total.
@@ -315,6 +333,38 @@ scanner dialog in continuous mode:
   silently consumed either. A code that resolves to no variant closes the camera and hands over to
   the inline picker rather than scanning past it: the picker is on the screen behind the dialog and
   has to be read and tapped.
+- **A camera scan asks how many (ADR-0012):** the code names *which* product, never how many, so a
+  camera scan resolves the variant and then stops. A confirmation step takes over the dialog and
+  nothing is recorded until it is answered. One scan can therefore mean a carton of twenty-four
+  rather than one box presented twenty-four times, which is the ordinary shape of a delivery — the
+  scan-means-one reading only ever beat typing while every item was physically presented to the
+  lens. The step starts at 1, so a single item stays two taps.
+- **Sized for a glove:** `−10 − [ 12 ] + +10`, with the number also typeable for an exact odd
+  count. The steppers are the primary control because a gloved hand finds a large button reliably
+  and a text caret badly; `±10` exists so a pallet of forty-eight is five taps rather than
+  forty-seven. `adjustScanQuantity` clamps at one — coming back down from an overshoot is ordinary
+  input, and landing on 0 would put a count on screen the server is bound to refuse. The confirm
+  button states the amount it is about to add (**Dodaj 12**) rather than saying "Add", because a
+  mis-tapped `+10` is a larger error than a duplicated scan ever was.
+- **Nothing is scanned past an unanswered step:** no decode, no manual-entry field, and no
+  Cmd/Ctrl+Enter. `BarcodeScannerDialog` takes the step as an opaque `interruption` node and owns
+  exactly that one rule; the gloved-hands UI and every quantity rule stay in `warehouseman`. The
+  step renders *inside* the scanner dialog rather than as a second modal, because a separate dialog
+  would unmount the `<video>` element holding the `MediaStream` and pay a fresh camera start per
+  counted item, on top of nesting two focus traps.
+- **ADR-0011 is frozen, not repealed, while the step is open:** neither a decode nor an empty frame
+  is observed, exactly as while a count is posting. After confirming, the carton is usually still in
+  front of the lens — the operator was looking at the screen — so without the repeat rule the step
+  would immediately re-raise for the item just counted. Freezing rather than ignoring matters
+  because a device lowered to tap `+10` shows an empty frame for far longer than the three ticks
+  that mean "the carton left", and advancing through that would invent a second carton.
+- **Cancel is free, refusal is not punished:** nothing is written until the step is answered, so a
+  misread barcode costs a tap rather than a correction on the pallet, and a count the server refuses
+  leaves the step open with the chosen amount intact.
+- **The typed path is unchanged:** a wedge-scanned or hand-typed code carries its quantity in the
+  field beside it on the same screen, already visible and already reachable, so a step there would
+  be ceremony. Blank still means one unit. Both paths resolve and refuse a code on identical terms
+  and differ only in where the amount comes from.
 - **Scan feedback:** the operator is looking at the pallet, not at the screen, so an accepted scan
   flashes a ring over the preview, plays a short blip and vibrates, and appends a line to the **Ostatnie
   skany** list showing the product, what the scan added and the resulting total — the running total,
@@ -612,6 +662,20 @@ schema or command signature changed, so there is no migration and nothing to rol
 side — reverting the Panel change leaves a working text-field count. `BarcodeScannerDialog` is now
 shared by three call sites, which makes its props a contract surface: read
 `.ai/guides/upstream/BACKWARD_COMPATIBILITY.md` before changing them again.
+
+**Backward compatibility of the quantity step.** Read under that same rule, and additive on every
+axis it touches. `BarcodeScannerDialog` gained one optional prop, `interruption`; nothing is
+removed, renamed or narrowed. Omitted, it is `null` and the dialog renders and behaves exactly as
+before, so `/backend/catalog/scan` and the pallet-label scan on the pallets screen are unaffected.
+The prop carries a behavioral contract worth stating plainly, because it is not inferable from the
+type: **while it is non-null the dialog accepts no scan and freezes the repeat-rule state.** A
+future caller that passes a node without wanting that gate would be misusing it.
+
+`scanStream.ts` and its tests are untouched — ADR-0012 changes when the rule is consulted, never the
+rule. `adjustScanQuantity` is a new export beside `resolveCountQuantity`, which is unchanged and
+still what the typed path uses. The server is untouched: no route, payload, entity, column or
+command signature changed, so there is no migration and nothing to roll back server-side. Reverting
+leaves camera scans counting one unit each, which is the behavior this phase started from.
 
 ## Risks and Tradeoffs
 

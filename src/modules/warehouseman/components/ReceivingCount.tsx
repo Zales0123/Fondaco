@@ -13,6 +13,7 @@ import {
   type ScannerLogEntry,
 } from '@/modules/barcode_scanner/components/BarcodeScannerDialog'
 import { PanelLinkButton, ScreenEmpty, ScreenError, ScreenMessage, ScreenWarning } from './ReceivingStates'
+import { ScanQuantityStep } from './ScanQuantityStep'
 import {
   closePallet,
   countPalletLine,
@@ -49,6 +50,13 @@ import { takePalletLabelNotice } from '../lib/palletLabelNotice'
  */
 const SCAN_LOG_LIMIT = 10
 
+/**
+ * A scan that has named a product and is waiting to be told how many. It holds the resolved
+ * variant rather than the code: the lookup already happened, and re-resolving on confirm
+ * would let the answer change between the name the operator read and the line they get.
+ */
+type PendingScan = { catalogVariantId: string; name: string | null; code: string }
+
 export type ReceivingCountProps = { receiptId: string; palletId: string }
 
 /**
@@ -84,6 +92,8 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
   const [scannerOpen, setScannerOpen] = React.useState(false)
   const [scanStatus, setScanStatus] = React.useState<string | null>(null)
   const [scanLog, setScanLog] = React.useState<ScannerLogEntry[]>([])
+  // A camera scan that has named its product and is waiting to be told how many.
+  const [pendingScan, setPendingScan] = React.useState<PendingScan | null>(null)
   // The camera fires `onDetected` on every frame it decodes, so the guard has to be read
   // synchronously — a state flag would let a second count start inside the same tick.
   const countInFlight = React.useRef(false)
@@ -131,6 +141,9 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
     scannerOpenRef.current = false
     setScannerOpen(false)
     setScanStatus(null)
+    // An unanswered step dies with the camera that raised it. Nothing was counted, and
+    // leaving it pending would ask about a product on the next session's first scan.
+    setPendingScan(null)
     // The dialog hands focus back to whatever opened it, so the barcode field is claimed once
     // that has happened — a wedge scanner types into it and the floor keeps counting.
     window.setTimeout(focusBarcode, 0)
@@ -162,19 +175,25 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
     queryClient.invalidateQueries({ queryKey: ['warehouseman.receiving.pallets', receiptId] })
 
   /**
-   * Records one count, whichever input named the product. The quantity field is a multiplier
-   * rather than an entry the floor owes us: left blank a scan counts one unit, which is what
-   * `resolveCountQuantity` says, and a typed multiplier is still refused when it is not a
-   * quantity.
+   * Records one count, whichever input named the product.
+   *
+   * `confirmed` is the amount the camera's quantity step settled on. Without it the typed
+   * path's own quantity field is read, where blank means one unit — a typed barcode with an
+   * empty quantity is still the gesture "one more of these". The two paths name their amount
+   * differently on purpose; they must not read each other's.
    */
-  async function recordCount(catalogVariantId: string, resolvedName: string | null) {
-    const parsed = resolveCountQuantity(quantity)
+  async function recordCount(
+    catalogVariantId: string,
+    resolvedName: string | null,
+    confirmed?: number,
+  ): Promise<boolean> {
+    const parsed = confirmed != null ? String(confirmed) : resolveCountQuantity(quantity)
     if (!parsed) {
       const message = t('pz.palletLines.errors.quantityInvalid')
       setFormError(message)
       pushScanLog('error', message)
       setScanStatus(null)
-      return
+      return false
     }
     setSubmitting(true)
     try {
@@ -197,19 +216,21 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
         }),
       )
       setBarcode('')
-      // The multiplier never survives a count. A quantity left over from the last product
-      // would silently multiply the next scan, and nobody would see it happen.
+      // A typed quantity belongs to the product it was typed for. Left behind it would
+      // silently apply to the next one, and nobody would see it happen.
       setQuantity('')
       setUnknownBarcode(null)
       setFormError(null)
       setScanStatus(null)
       await invalidatePallets()
+      return true
     } catch (error) {
       // The server's refusal is already localized, so it is what the log and the screen say.
       const message = messageOf(error, t('pz.palletLines.errors.countFailed'))
       setFormError(message)
       pushScanLog('error', message)
       setScanStatus(null)
+      return false
     } finally {
       setSubmitting(false)
       focusBarcodeUnlessScanning()
@@ -220,8 +241,13 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
    * The screen's only counting-by-barcode path. A typed code and a code the camera read meet
    * here, so the camera can never record something the keyboard would have refused — nor be
    * refused on different terms.
+   *
+   * They part company only after the code has resolved, and only over *how many*: a typed
+   * code carries its quantity in the form beside it and counts straight away, while a camera
+   * scan has no field to have filled in, so it stops here and asks. Both have already been
+   * refused, or not, on identical terms by then.
    */
-  async function countByBarcode(scanned: string): Promise<void> {
+  async function countByBarcode(scanned: string, fromCamera = false): Promise<void> {
     const code = normalizeScannedCode(scanned)
     if (!code) {
       setFormError(t('pz.palletLines.errors.barcodeRequired'))
@@ -235,6 +261,13 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
     setScanStatus(t('warehouseman.receiving.count.scanner.looking', undefined, { code }))
     try {
       const variant = await resolveVariantByBarcode(code)
+      if (fromCamera) {
+        // Nothing is counted yet. The step owns the rest, and the dialog accepts no further
+        // scan while it is up, so this product cannot be overtaken by the next carton.
+        setPendingScan({ catalogVariantId: variant.catalogVariantId, name: variant.name, code })
+        setScanStatus(null)
+        return
+      }
       await recordCount(variant.catalogVariantId, variant.name)
     } catch (error) {
       setScanStatus(null)
@@ -268,7 +301,25 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
   }
 
   function onDetected(raw: string) {
-    void countByBarcode(raw)
+    void countByBarcode(raw, true)
+  }
+
+  /**
+   * The step's answer. The count is recorded here rather than in the step so the pending
+   * scan only clears once it is actually on the pallet — a refusal leaves the step up with
+   * the number intact, because re-choosing 24 after a dropped connection is pure loss.
+   */
+  async function onConfirmPendingScan(confirmed: number) {
+    if (!pendingScan) return
+    const recorded = await recordCount(pendingScan.catalogVariantId, pendingScan.name, confirmed)
+    if (recorded) setPendingScan(null)
+  }
+
+  function onCancelPendingScan() {
+    // Nothing was written, so there is nothing to undo: the scan simply did not become a
+    // count. The camera picks up again the moment the step is gone.
+    setPendingScan(null)
+    setFormError(null)
   }
 
   function openScanner() {
@@ -508,6 +559,8 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
               disabled={closed || submitting}
               onChange={(event) => setQuantity(event.target.value)}
             />
+            {/* Only the typed path reads this field; a camera scan is asked its quantity
+                outright, so there is nothing here for it to have left armed. */}
             <span className="text-muted-foreground">
               {t('warehouseman.receiving.count.quantity.hint')}
             </span>
@@ -643,6 +696,21 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
         errorMessage={formError}
         continuous
         log={scanLog}
+        // A resolved scan takes over the dialog until it is told how many. The dialog stops
+        // accepting scans for as long as this is here, which is what makes one carton
+        // impossible to overtake with the next.
+        interruption={
+          pendingScan ? (
+            <ScanQuantityStep
+              productName={productLabel(pendingScan.name, unknownProduct)}
+              code={pendingScan.code}
+              busy={submitting}
+              error={formError}
+              onConfirm={(confirmed) => void onConfirmPendingScan(confirmed)}
+              onCancel={onCancelPendingScan}
+            />
+          ) : null
+        }
         title={t('warehouseman.receiving.count.scanner.title')}
         description={t('warehouseman.receiving.count.scanner.description')}
         manualLabel={t('warehouseman.receiving.count.scanner.manualLabel')}

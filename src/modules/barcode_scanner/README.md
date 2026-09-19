@@ -43,8 +43,37 @@ behaviour.
 |---|---|---|
 | `continuous` | `false` | Keeps scanning; adds a full-width **Done** button, because the dialog no longer closes itself. |
 | `log` | `undefined` | Running history, **newest entry first** — the natural shape of `[entry, ...previous]`. The first five render under the video in that order, each with a check/cross icon so the outcome never rests on colour alone. |
+| `interruption` | `undefined` | A step that must be answered before scanning continues. Takes over the dialog body and **suspends acceptance entirely**. |
+
+### `interruption`: the caller needs an answer before the next scan
+
+Some callers cannot act on a code alone. Counting a delivery is the example:
+the code names *which* product, but not *how many*, and one scan should be able
+to mean a carton of twenty-four rather than one box presented twenty-four times.
+
+So the caller renders its own question — `warehouseman`'s is
+`components/ScanQuantityStep.tsx` — and hands it over as a node. The dialog
+knows nothing about what is being asked. It owns exactly one rule: **while an
+interruption is up, nothing is scanned.** Concretely that means the poll loop
+returns before reading the frame, the manual-entry field is hidden and its
+Cmd/Ctrl+Enter is refused, and the Done button is out of reach.
+
+Two details are load-bearing:
+
+- **The `<video>` element is hidden, never unmounted.** It holds the live
+  `MediaStream`. Dropping it would stop the camera and make every counted item
+  pay a fresh `getUserMedia` start — one to two seconds, per carton. This is
+  also why the step is not a second stacked dialog.
+- **The repeat-rule state is frozen**, not advanced — neither a decode nor an
+  empty frame is observed, exactly as while `busy`. See the ADR note below.
 
 ### When does the same barcode count twice?
+
+> Under `interruption`, "after the step closes *and* the code has since left the
+> frame". The freeze is what makes that true: a carton still in front of the lens
+> when the step closes is the one just counted, not a new one, and lowering the
+> device to tap `+10` must not be read as it leaving. See `docs/adr/0011` and
+> `docs/adr/0012`.
 
 Counting a pallet means scanning **twenty identical cartons in a row**, and
 every one of them has to count — so "ignore the same code for N milliseconds"

@@ -2,6 +2,7 @@ import { describe, expect, it } from '@jest/globals'
 import {
   buildReceivingListQuery,
   describePalletLookupFailure,
+  adjustScanQuantity,
   describePalletPrintOutcome,
   formatCountQuantity,
   normalizeScannedCode,
@@ -210,5 +211,25 @@ describe('describePalletLookupFailure', () => {
   it('falls back when the failure says nothing at all', () => {
     expect(describePalletLookupFailure(new Error(''), messages)).toBe('Could not open the pallet.')
     expect(describePalletLookupFailure(undefined, messages)).toBe('Could not open the pallet.')
+  })
+})
+
+describe('adjustScanQuantity', () => {
+  it('steps by one in both directions', () => {
+    expect(adjustScanQuantity(1, 1)).toBe(2)
+    expect(adjustScanQuantity(12, -1)).toBe(11)
+  })
+
+  it('steps by ten, so a pallet of forty-eight is not forty-seven taps', () => {
+    expect(adjustScanQuantity(1, 10)).toBe(11)
+    expect(adjustScanQuantity(48, -10)).toBe(38)
+  })
+
+  it('never goes below one, because a scan asserts the product is on the pallet', () => {
+    // −10 from 3 is the ordinary way to reach this: the floor overshot and is coming back
+    // down. Landing on 0 or −7 would offer a count the server is bound to refuse.
+    expect(adjustScanQuantity(3, -10)).toBe(1)
+    expect(adjustScanQuantity(1, -1)).toBe(1)
+    expect(adjustScanQuantity(1, -10)).toBe(1)
   })
 })
