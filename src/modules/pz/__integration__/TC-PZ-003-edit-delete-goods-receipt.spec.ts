@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext } from '@playwright/test'
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 
 /**
  * Editing and deleting a draft, exercised at the module's HTTP API — where every rule this
@@ -101,8 +101,21 @@ function readOperation(response: { headers: () => Record<string, string> }): { i
 }
 
 
+/**
+ * The dev server floats a runtime-diagnostics banner over the bottom of the page whenever
+ * something unrelated logs an error, and it swallows clicks aimed at the controls beneath
+ * it. It does not exist in the environments this app ships to, so it is hidden rather than
+ * worked around.
+ */
+async function hideDevDiagnostics(page: Page): Promise<void> {
+  await page.addStyleTag({
+    content: '[data-testid="dev-runtime-diagnostics-banner"] { display: none !important; }',
+  })
+}
+
 test.describe('TC-PZ-003 edit and delete draft goods receipts', () => {
   let admin: APIRequestContext
+  let colleague: APIRequestContext
   let adminCookies: Awaited<ReturnType<APIRequestContext['storageState']>>['cookies']
   let warehouseId: string
   let productAId: string
@@ -140,21 +153,57 @@ test.describe('TC-PZ-003 edit and delete draft goods receipts', () => {
    * rate limit on a long-lived dev server.
    */
   test.beforeAll(async ({ playwright }) => {
-    admin = await playwright.request.newContext({ baseURL: process.env.BASE_URL || 'http://localhost:3000' })
+    const baseURL = process.env.BASE_URL || 'http://localhost:3000'
+    admin = await playwright.request.newContext({ baseURL })
+    colleague = await playwright.request.newContext({ baseURL })
     await login(admin, ADMIN.email, ADMIN.password)
     adminCookies = (await admin.storageState()).cookies
     try {
       warehouseId = await createWarehouse(admin)
       productAId = await createProduct(admin, 'a')
       productBId = await createProduct(admin, 'b')
+      // A second authorised account. The undo route looks up the latest action for the
+      // CALLER, so only another actor's write can leave a token redeemable while the
+      // record has moved on — which is the one public path to the command's own guard.
+      const roleName = `pz-editor-${RUN}`
+      const role = await admin.post('/api/auth/roles', { data: { name: roleName }, failOnStatusCode: false })
+      expect(role.status(), await role.text()).toBeLessThan(400)
+      const roleId = ((await role.json()) as Created).id as string
+      const acl = await admin.put('/api/auth/roles/acl', {
+        data: {
+          roleId,
+          features: ['pz.goodsReceipts.view', 'pz.goodsReceipts.manage', 'catalog.products.view', 'wms.view'],
+        },
+        failOnStatusCode: false,
+      })
+      expect(acl.status(), await acl.text()).toBeLessThan(400)
+
+      const organizations = await admin.get('/api/directory/organizations?pageSize=1')
+      const organizationId = ((await organizations.json()) as { items?: Array<{ id?: string }> }).items?.[0]?.id
+      expect(organizationId, 'no organization to attach the test colleague to').toBeTruthy()
+      const colleagueEmail = `pz-editor-${RUN}@acme.com`
+      const createdColleague = await admin.post('/api/auth/users', {
+        data: {
+          email: colleagueEmail,
+          name: 'Integration Goods Receipt Editor',
+          password: 'Warehouse123!',
+          organizationId,
+          roles: [roleName],
+        },
+        failOnStatusCode: false,
+      })
+      expect(createdColleague.status(), await createdColleague.text()).toBeLessThan(400)
+      await login(colleague, colleagueEmail, 'Warehouse123!')
     } catch (error) {
       await admin.dispose()
+      await colleague.dispose()
       throw error
     }
   })
 
   test.afterAll(async () => {
     await admin?.dispose()
+    await colleague?.dispose()
   })
 
   test('edits a draft header and replaces its lines', async () => {
@@ -459,6 +508,112 @@ test.describe('TC-PZ-003 edit and delete draft goods receipts', () => {
     expect(await listById(admin, draft.id)).toHaveLength(0)
   })
 
+  test('refuses an undo the command itself must catch, when someone else moved the document on', async () => {
+    const draft = await createDraft(admin)
+    const opened = await readGoodsReceipt(admin, draft.id)
+    const body = {
+      id: draft.id,
+      documentNumber: draft.documentNumber,
+      documentDate: yesterday(),
+      warehouseId,
+      lines: [{ catalogProductId: productAId, quantity: '2' }],
+    }
+
+    const mine = await admin.put(API, {
+      headers: { [LOCK_HEADER]: opened.updatedAt ?? '' },
+      data: { ...body, supplierName: 'Hurtownia Moja Edycja' },
+      failOnStatusCode: false,
+    })
+    expect(mine.status(), await mine.text()).toBe(200)
+    const operation = readOperation(mine)
+
+    // A different actor edits, so the undo route still sees my edit as my latest action
+    // and hands the token to the command — which has to refuse it itself.
+    const current = await readGoodsReceipt(admin, draft.id)
+    const theirs = await colleague.put(API, {
+      headers: { [LOCK_HEADER]: current.updatedAt ?? '' },
+      data: { ...body, supplierName: 'Hurtownia Kolegi' },
+      failOnStatusCode: false,
+    })
+    expect(theirs.status(), await theirs.text()).toBe(200)
+
+    const undone = await admin.post('/api/audit_logs/audit-logs/actions/undo', {
+      data: { undoToken: operation.undoToken },
+      failOnStatusCode: false,
+    })
+    expect(undone.status(), await undone.text()).toBe(409)
+    expect((await readGoodsReceipt(admin, draft.id)).supplierName).toBe('Hurtownia Kolegi')
+  })
+
+  test('redoes an undone edit without being handed a version header', async () => {
+    const draft = await createDraft(admin)
+    const opened = await readGoodsReceipt(admin, draft.id)
+
+    const edited = await admin.put(API, {
+      headers: { [LOCK_HEADER]: opened.updatedAt ?? '' },
+      data: {
+        id: draft.id,
+        documentNumber: draft.documentNumber,
+        documentDate: yesterday(),
+        supplierName: 'Hurtownia Po Edycji',
+        warehouseId,
+        lines: [
+          { catalogProductId: productBId, quantity: '4', unit: 'kg' },
+          { catalogProductId: productAId, quantity: '1' },
+        ],
+      },
+      failOnStatusCode: false,
+    })
+    expect(edited.status(), await edited.text()).toBe(200)
+    const operation = readOperation(edited)
+
+    const undone = await admin.post('/api/audit_logs/audit-logs/actions/undo', {
+      data: { undoToken: operation.undoToken },
+      failOnStatusCode: false,
+    })
+    expect(undone.status(), await undone.text()).toBe(200)
+    expect((await readGoodsReceipt(admin, draft.id)).lineCount).toBe(1)
+
+    // The redo endpoint sends only a log id, never a version — replaying the command would
+    // fail on the version this module requires, so redo restores the state instead.
+    const redone = await admin.post('/api/audit_logs/audit-logs/actions/redo', {
+      data: { logId: operation.id },
+      failOnStatusCode: false,
+    })
+    expect(redone.status(), await redone.text()).toBe(200)
+
+    const restored = await readGoodsReceipt(admin, draft.id)
+    expect(restored.supplierName).toBe('Hurtownia Po Edycji')
+    expect(restored.lineCount).toBe(2)
+    expect(restored.lines?.map((line) => line.quantity)).toEqual(['4.0000', '1.0000'])
+  })
+
+  test('redoes an undone delete', async () => {
+    const draft = await createDraft(admin)
+    const current = await readGoodsReceipt(admin, draft.id)
+
+    const removed = await admin.delete(`${API}?id=${encodeURIComponent(draft.id)}`, {
+      headers: { [LOCK_HEADER]: current.updatedAt ?? '' },
+      failOnStatusCode: false,
+    })
+    expect(removed.status(), await removed.text()).toBe(200)
+    const operation = readOperation(removed)
+
+    const undone = await admin.post('/api/audit_logs/audit-logs/actions/undo', {
+      data: { undoToken: operation.undoToken },
+      failOnStatusCode: false,
+    })
+    expect(undone.status(), await undone.text()).toBe(200)
+    expect(await listById(admin, draft.id)).toHaveLength(1)
+
+    const redone = await admin.post('/api/audit_logs/audit-logs/actions/redo', {
+      data: { logId: operation.id },
+      failOnStatusCode: false,
+    })
+    expect(redone.status(), await redone.text()).toBe(200)
+    expect(await listById(admin, draft.id)).toHaveLength(0)
+  })
+
   test('loads a draft with its lines and saves added and removed lines from the screen', async ({ context, page }) => {
     test.setTimeout(120_000)
     await context.addCookies(adminCookies)
@@ -470,6 +625,7 @@ test.describe('TC-PZ-003 edit and delete draft goods receipts', () => {
     })
 
     await page.goto(`${INDEX_PATH}/${draft.id}/edit`)
+    await hideDevDiagnostics(page)
 
     // The screen opens with the stored lines, not an empty editor.
     await expect(page.getByRole('textbox', { name: /Quantity, position 1|Ilość, pozycja 1/i })).toHaveValue('2.0000')
@@ -495,6 +651,7 @@ test.describe('TC-PZ-003 edit and delete draft goods receipts', () => {
     const draft = await createDraft(context.request)
 
     await page.goto(`${INDEX_PATH}/${draft.id}/edit`)
+    await hideDevDiagnostics(page)
     const supplierField = page.getByPlaceholder(/Who sent the delivery|Kto przysłał dostawę/i)
     await expect(supplierField).toHaveValue('Hurtownia Kowalski')
 

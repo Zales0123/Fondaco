@@ -191,7 +191,9 @@ export default function GoodsReceiptsTable() {
         )}
         // No `onRowClick`: `DataTable` makes every row look clickable as soon as one is
         // supplied, and a confirmed row has nowhere to go yet. The Edit row action carries
-        // the navigation for the rows that do.
+        // the navigation for the rows that do — named explicitly, because the fallback
+        // matches an action's English label and would stop working in Polish.
+        rowClickActionIds={['pz.goodsReceipts.edit']}
         rowActions={(row) => {
           // Only offer what the row can actually do: the edit route refuses a confirmed
           // document and a caller without the manage feature, so pointing at it anyway

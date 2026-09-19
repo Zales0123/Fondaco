@@ -10,7 +10,7 @@ import {
 import { runCrudCommandWrite } from '@open-mercato/shared/lib/commands/runCrudCommandWrite'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import { buildChanges, emitCrudSideEffects, emitCrudUndoSideEffects } from '@open-mercato/shared/lib/commands/helpers'
-import { makeCreateRedo } from '@open-mercato/shared/lib/commands/redo'
+import { makeCreateRedo, resolveRedoSnapshot } from '@open-mercato/shared/lib/commands/redo'
 import { extractUndoPayload, type UndoPayload } from '@open-mercato/shared/lib/commands/undo'
 import {
   CrudHttpError,
@@ -858,6 +858,96 @@ function assertUndoableState(
   }
 }
 
+/**
+ * Re-applies an aggregate snapshot under the row lock.
+ *
+ * Redo cannot simply replay `execute`: the standard redo UI sends only a log id, and these
+ * commands require the record version a caller was shown — replaying would fail every time
+ * with "send the version". So redo restores the state the action produced, and only from
+ * the state its undo left behind. Already being in the target state is success with no
+ * further effects, so a retry is harmless.
+ */
+async function redoAggregateState(
+  ctx: CommandRuntimeContext,
+  target: SerializedGoodsReceipt,
+  expected: SerializedGoodsReceipt | null,
+  options: { deleted: boolean },
+): Promise<GoodsReceipt> {
+  const { translate } = await resolveTranslations()
+  const scope = requireUndoScope(ctx, target, translate)
+  const em = (ctx.container.resolve('em') as EntityManager).fork()
+  let receipt!: GoodsReceipt
+  let alreadyApplied = false
+
+  await withAtomicFlush(
+    em,
+    [
+      async () => {
+        receipt = assertFound(
+          await em.findOne(
+            GoodsReceipt,
+            {
+              id: target.id,
+              tenantId: scope.tenantId,
+              organizationId: scope.organizationId,
+            } as FilterQuery<GoodsReceipt>,
+            { lockMode: LockMode.PESSIMISTIC_WRITE },
+          ),
+          translate('pz.goodsReceipts.errors.notFound', 'That goods receipt no longer exists.'),
+        )
+        const lines = await findScopedLines(em, target.id, scope)
+        const inTargetState = options.deleted
+          ? receipt.deletedAt != null
+          : receipt.deletedAt == null && aggregateMatchesSnapshot(receipt, lines, target)
+        if (inTargetState) {
+          alreadyApplied = true
+          return
+        }
+        const undoneState = options.deleted ? receipt.deletedAt == null : receipt.deletedAt == null
+        if (!undoneState || !expected || !aggregateMatchesSnapshot(receipt, lines, expected)) {
+          throw conflict(
+            translate(
+              'pz.goodsReceipts.errors.redoStale',
+              'This goods receipt has changed since that action was undone, so it cannot be redone.',
+            ),
+          )
+        }
+        if (!options.deleted) for (const line of lines) em.remove(line)
+      },
+      () => {
+        if (alreadyApplied) return
+        if (options.deleted) {
+          const now = new Date()
+          receipt.deletedAt = now
+          receipt.updatedAt = now
+          em.persist(receipt)
+          return
+        }
+        restoreHeaderFromSnapshot(receipt, target)
+        em.persist(receipt)
+        for (const line of target.lines) em.persist(createLineFromSnapshot(em, receipt, target, line))
+      },
+    ],
+    { transaction: true },
+  )
+
+  if (!alreadyApplied) {
+    const dataEngine = ctx.container.resolve<DataEngine>('dataEngine')
+    await emitCrudSideEffects({
+      dataEngine,
+      action: options.deleted ? 'deleted' : 'updated',
+      entity: receipt,
+      identifiers: { id: target.id, tenantId: scope.tenantId, organizationId: scope.organizationId },
+      syncOrigin: ctx.syncOrigin,
+      events: goodsReceiptCrudEvents,
+      indexer: goodsReceiptCrudIndexer,
+    })
+  }
+
+  return receipt
+}
+
+
 const updateGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsReceipt> = {
   id: 'pz.goodsReceipts.update',
   isUndoable: true,
@@ -1035,6 +1125,12 @@ const updateGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
       indexer: goodsReceiptCrudIndexer,
     })
   },
+  async redo({ logEntry, ctx }) {
+    const after = resolveRedoSnapshot<SerializedGoodsReceipt>(logEntry)
+    const before = extractUndoPayload<UndoPayload<SerializedGoodsReceipt>>(logEntry)?.before ?? null
+    if (!after?.id) throw new Error('[internal] Missing goods receipt snapshot for redo')
+    return redoAggregateState(ctx, after, before, { deleted: false })
+  },
 }
 
 const deleteGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsReceipt> = {
@@ -1169,6 +1265,12 @@ const deleteGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
       events: goodsReceiptCrudEvents,
       indexer: goodsReceiptCrudIndexer,
     })
+  },
+  async redo({ logEntry, ctx }) {
+    // Redoing a delete means deleting again, from exactly the state its undo restored.
+    const before = extractUndoPayload<UndoPayload<SerializedGoodsReceipt>>(logEntry)?.before ?? null
+    if (!before?.id) throw new Error('[internal] Missing goods receipt snapshot for redo')
+    return redoAggregateState(ctx, before, before, { deleted: true })
   },
 }
 

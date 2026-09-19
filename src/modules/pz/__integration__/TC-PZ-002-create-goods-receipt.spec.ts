@@ -202,6 +202,18 @@ async function listById(request: APIRequestContext, id: string): Promise<GoodsRe
 }
 
 
+/**
+ * The dev server floats a runtime-diagnostics banner over the bottom of the page whenever
+ * something unrelated logs an error, and it swallows clicks aimed at the controls beneath
+ * it. It does not exist in the environments this app ships to, so it is hidden rather than
+ * worked around.
+ */
+async function hideDevDiagnostics(page: Page): Promise<void> {
+  await page.addStyleTag({
+    content: '[data-testid="dev-runtime-diagnostics-banner"] { display: none !important; }',
+  })
+}
+
 test.describe('TC-PZ-002 create a goods receipt', () => {
   let admin: APIRequestContext
   let adminCookies: Awaited<ReturnType<APIRequestContext['storageState']>>['cookies']
@@ -449,6 +461,7 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
     const documentNumber = `PZ/${RUN}/7`
 
     await page.goto(`${INDEX_PATH}/create`)
+    await hideDevDiagnostics(page)
     const documentNumberField = page.getByPlaceholder('PZ/1/2026')
     await documentNumberField.focus()
     await expect(documentNumberField).toBeFocused()
@@ -534,6 +547,7 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
     const documentNumber = `PZ/${RUN}/6`
 
     await page.goto(`${INDEX_PATH}/create`)
+    await hideDevDiagnostics(page)
 
     const documentNumberField = page.getByPlaceholder('PZ/1/2026')
     await documentNumberField.fill(documentNumber)
