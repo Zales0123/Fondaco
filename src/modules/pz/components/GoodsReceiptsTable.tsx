@@ -14,7 +14,6 @@ import { formatDisplayDate } from '@open-mercato/ui/primitives/date-format'
 import { deleteCrud, fetchCrudList } from '@open-mercato/ui/backend/utils/crud'
 import { readApiResultOrThrow, withScopedApiRequestHeaders } from '@open-mercato/ui/backend/utils/apiCall'
 import { buildOptimisticLockHeader } from '@open-mercato/ui/backend/utils/optimisticLock'
-import { surfaceRecordConflict } from '@open-mercato/ui/backend/conflicts'
 import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
@@ -26,6 +25,7 @@ import {
   GOODS_RECEIPTS_LIST_HREF,
   GOODS_RECEIPTS_TABLE_ID,
   confirmGoodsReceipt,
+  surfaceGoodsReceiptConflict,
   GOODS_RECEIPTS_QUERY_KEY,
   useGoodsReceiptPermissions,
   useWarehouseNames,
@@ -155,6 +155,12 @@ function buildColumns(t: Translate, locale: string): ColumnDef<GoodsReceiptRow>[
       enableSorting: false,
       meta: { priority: 6 },
     },
+    {
+      accessorKey: 'palletCount',
+      header: t('pz.goodsReceipts.table.column.palletCount'),
+      enableSorting: false,
+      meta: { priority: 7 },
+    },
   ]
 }
 
@@ -242,6 +248,7 @@ export default function GoodsReceiptsTable() {
       placeholder: t('pz.goodsReceipts.table.filter.status.any'),
       options: [
         { value: 'draft', label: t('pz.goodsReceipts.status.draft') },
+        { value: 'receiving', label: t('pz.goodsReceipts.status.receiving') },
         { value: 'confirmed', label: t('pz.goodsReceipts.status.confirmed') },
       ],
     },
@@ -324,7 +331,7 @@ export default function GoodsReceiptsTable() {
       flash(t('pz.goodsReceipts.form.flash.deleted'), 'success')
       queryClient.invalidateQueries({ queryKey: [QUERY_KEY] })
     } catch (err) {
-      if (surfaceRecordConflict(err, t)) {
+      if (surfaceGoodsReceiptConflict(err, t)) {
         queryClient.invalidateQueries({ queryKey: [QUERY_KEY] })
         return
       }
@@ -348,7 +355,7 @@ export default function GoodsReceiptsTable() {
       await queryClient.invalidateQueries({ queryKey: [QUERY_KEY] })
       flash(t('pz.goodsReceipts.form.flash.confirmed'), 'success')
     } catch (err) {
-      if (surfaceRecordConflict(err, t)) {
+      if (surfaceGoodsReceiptConflict(err, t)) {
         queryClient.invalidateQueries({ queryKey: [QUERY_KEY] })
         return
       }
@@ -401,24 +408,20 @@ export default function GoodsReceiptsTable() {
         }}
         // No `onRowClick`: the row action carries the navigation, named explicitly because
         // the fallback matches an action's English label and would stop working in Polish.
-        // A draft opens its editor and a confirmed document opens its read-only view, so
-        // every row leads somewhere.
+        // A draft still opens its editor; View exposes the release decision.
         rowClickActionIds={['pz.goodsReceipts.edit', 'pz.goodsReceipts.view']}
         rowActions={(row) => {
-          // Only offer what the row can actually do: the edit route refuses a confirmed
+          // Only offer what the row can actually do: the edit route refuses a frozen
           // document and a caller without the manage feature, so pointing at it anyway
           // would just be a door that closes in the user's face.
           const isDraft = row.status === 'draft'
           const items = []
-          // A confirmed document is read-only, so it gets a View rather than an Edit. The
-          // view needs no more than the feature that put the row on screen.
-          if (!isDraft) {
-            items.push({
-              id: 'pz.goodsReceipts.view',
-              label: t('pz.goodsReceipts.table.actions.view'),
-              href: viewHref(row),
-            })
-          }
+          // View needs no more than the feature that put the row on screen.
+          items.push({
+            id: 'pz.goodsReceipts.view',
+            label: t('pz.goodsReceipts.table.actions.view'),
+            href: viewHref(row),
+          })
           if (canManage && isDraft) {
             items.push(
               {
@@ -436,7 +439,7 @@ export default function GoodsReceiptsTable() {
           }
           // Confirming is a separate grant from editing, so someone who may finalise a
           // delivery without entering one still gets the action.
-          if (canConfirm && isDraft) {
+          if (canConfirm && row.status === 'receiving') {
             items.push({
               id: 'pz.goodsReceipts.confirm',
               label: t('pz.goodsReceipts.table.actions.confirm'),

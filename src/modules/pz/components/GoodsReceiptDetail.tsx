@@ -1,10 +1,13 @@
 "use client"
 
 import * as React from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchCrudList } from '@open-mercato/ui/backend/utils/crud'
 import { ErrorMessage, LoadingMessage, RecordNotFoundState } from '@open-mercato/ui/backend/detail'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
+import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
+import { flash } from '@open-mercato/ui/backend/FlashMessages'
+import { Button } from '@open-mercato/ui/primitives/button'
 import {
   Table,
   TableBody,
@@ -19,9 +22,14 @@ import { formatDisplayDate } from '@open-mercato/ui/primitives/date-format'
 import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import type { GoodsReceiptListItem } from '../lib/goodsReceiptListItem'
+import { PalletsSection } from './PalletsSection'
+import { ReceivingSummaryView, useReceivingSummary } from './ReceivingSummary'
 import {
   GOODS_RECEIPTS_LIST_HREF,
   GOODS_RECEIPTS_QUERY_KEY,
+  surfaceGoodsReceiptConflict,
+  transitionGoodsReceipt,
+  useGoodsReceiptPermissions,
   useWarehouseNames,
 } from './goodsReceiptsPresentation'
 
@@ -33,9 +41,29 @@ const STATUS_VARIANTS: Record<GoodsReceiptListItem['status'], StatusBadgeVariant
   confirmed: 'success',
 }
 
+function ReceivingSummarySection({ goodsReceiptId }: { goodsReceiptId: string }) {
+  const t = useT()
+  const { data, isLoading, error } = useReceivingSummary(goodsReceiptId)
+  return (
+    <section className="space-y-4 border-t pt-6" aria-labelledby="goods-receipt-summary-heading">
+      <h2 id="goods-receipt-summary-heading" className="text-base font-semibold">
+        {t('pz.receiving.summary.title')}
+      </h2>
+      {isLoading ? <LoadingMessage label={t('pz.receiving.summary.loading')} />
+        : error ? <ErrorMessage label={t('pz.receiving.summary.error')} />
+        : data ? <ReceivingSummaryView summary={data} />
+        : <ErrorMessage label={t('pz.receiving.summary.error')} />}
+    </section>
+  )
+}
+
 export function GoodsReceiptDetail({ id }: { id: string }) {
   const t = useT()
   const locale = useLocale()
+  const queryClient = useQueryClient()
+  const { confirm, ConfirmDialogElement } = useConfirmDialog()
+  const { canManage, canConfirm } = useGoodsReceiptPermissions()
+  const [pending, setPending] = React.useState(false)
   const scopeVersion = useOrganizationScopeVersion()
   const { data, isLoading, error } = useQuery<GoodsReceiptsResponse>({
     queryKey: [GOODS_RECEIPTS_QUERY_KEY, 'detail', id, scopeVersion],
@@ -47,6 +75,28 @@ export function GoodsReceiptDetail({ id }: { id: string }) {
     [item],
   )
   const warehouseNames = useWarehouseNames(liveWarehouseIds)
+
+  async function handleTransition(action: 'release' | 'withdraw' | 'confirm', receipt: GoodsReceiptListItem) {
+    const prefix = action === 'confirm' ? 'pz.goodsReceipts.table.confirm.confirm' : `pz.goodsReceipts.form.${action}`
+    const acknowledged = await confirm({
+      title: t(`${prefix}.title`),
+      description: t(`${prefix}.description`, undefined, { documentNumber: receipt.documentNumber }),
+      confirmText: t(`${prefix}.action`),
+    })
+    if (!acknowledged) return
+    setPending(true)
+    try {
+      await transitionGoodsReceipt(action, receipt.id, receipt.updatedAt)
+      await queryClient.invalidateQueries({ queryKey: [GOODS_RECEIPTS_QUERY_KEY] })
+      flash(t(`pz.goodsReceipts.form.flash.${action === 'confirm' ? 'confirmed' : action === 'release' ? 'released' : 'withdrawn'}`), 'success')
+    } catch (err) {
+      if (!surfaceGoodsReceiptConflict(err, t)) {
+        flash(err instanceof Error && err.message ? err.message : t(`pz.goodsReceipts.form.error.${action}`), 'error')
+      }
+    } finally {
+      setPending(false)
+    }
+  }
 
   if (isLoading) return <LoadingMessage label={t('pz.goodsReceipts.view.loading')} />
   if (error) return <ErrorMessage label={t('pz.goodsReceipts.view.error.load')} />
@@ -79,6 +129,20 @@ export function GoodsReceiptDetail({ id }: { id: string }) {
         backHref={GOODS_RECEIPTS_LIST_HREF}
         backLabel={t('pz.goodsReceipts.form.actions.backToList')}
       />
+
+      {canManage && (item.status === 'draft' || item.status === 'receiving') ? (
+        <div className="flex flex-wrap gap-2">
+          {item.status === 'draft' ? (
+            <Button disabled={pending} onClick={() => { void handleTransition('release', item) }}>
+              {t('pz.goodsReceipts.form.actions.release')}
+            </Button>
+          ) : (
+            <Button variant="outline" disabled={pending} onClick={() => { void handleTransition('withdraw', item) }}>
+              {t('pz.goodsReceipts.form.actions.withdraw')}
+            </Button>
+          )}
+        </div>
+      ) : null}
 
       <section className="space-y-4" aria-labelledby="goods-receipt-header-heading">
         <h2 id="goods-receipt-header-heading" className="text-base font-semibold">
@@ -140,6 +204,14 @@ export function GoodsReceiptDetail({ id }: { id: string }) {
           </Table>
         </div>
       </section>
+      <PalletsSection goodsReceiptId={item.id} />
+      <ReceivingSummarySection goodsReceiptId={item.id} />
+      {canConfirm && item.status === 'receiving' ? (
+        <Button disabled={pending} onClick={() => { void handleTransition('confirm', item) }}>
+          {t('pz.goodsReceipts.form.actions.confirm')}
+        </Button>
+      ) : null}
+      {ConfirmDialogElement}
     </div>
   )
 }
