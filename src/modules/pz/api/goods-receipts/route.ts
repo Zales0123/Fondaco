@@ -54,7 +54,7 @@ const NO_SUCH_ID = '00000000-0000-0000-0000-000000000000'
  * The engine reroutes a base-column `like`/`ilike` through `search_tokens` by default, and
  * its own source says what that costs: tokenization splits on non-alphanumerics and drops
  * short tokens, so `ZK 1/2026` degrades to {202, 2026} and matches every document from that
- * year. Goods receipt numbers are full of separators — `PZ/1/2026` is the ordinary shape —
+ * year. Goods receipt numbers are full of separators — `ZPZ/1/2026` is the ordinary shape —
  * so the one search people rely on most is exactly the one that would break. This keeps the
  * match literal.
  *

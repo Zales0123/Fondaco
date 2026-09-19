@@ -10,7 +10,7 @@
 export const metadata = {
   requireAuth: true,
   requireFeatures: ['pz.goodsReceipts.view'],
-  pageTitle: 'Goods Receipts',
+  pageTitle: 'Goods Receipt Orders',
   pageTitleKey: 'pz.goodsReceipts.page.title',
   pageGroup: 'WMS',
   pageGroupKey: 'wms.nav.group',
@@ -18,6 +18,6 @@ export const metadata = {
   icon: 'package-plus',
   breadcrumb: [
     { label: 'WMS', labelKey: 'wms.backend.nav.title', href: '/backend/wms' },
-    { label: 'Goods Receipts', labelKey: 'pz.goodsReceipts.page.title' },
+    { label: 'Goods Receipt Orders', labelKey: 'pz.goodsReceipts.page.title' },
   ],
 } as const

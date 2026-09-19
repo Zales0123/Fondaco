@@ -351,7 +351,7 @@ test.describe('TC-PZ-004 confirm a goods receipt', () => {
     await expect(page.getByText(/cannot be undone|nie można go cofnąć/i).first()).toBeVisible()
     expect((await readGoodsReceipt(admin, draft.id)).status).toBe('draft')
 
-    await page.getByRole('button', { name: /Confirm goods receipt|Zatwierdź przyjęcie/i }).first().click()
+    await page.getByRole('button', { name: /Confirm goods receipt order|Zatwierdź zlecenie/i }).first().click()
     await page.waitForURL(new RegExp(`${INDEX_PATH}(\\?|$)`))
 
     // The index is read through the same endpoint the table renders, with its list cache

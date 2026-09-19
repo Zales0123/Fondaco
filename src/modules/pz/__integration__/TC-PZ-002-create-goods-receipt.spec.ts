@@ -452,7 +452,7 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
 
     await page.goto(`${INDEX_PATH}/create`)
     await hideDevDiagnostics(page)
-    const documentNumberField = page.getByPlaceholder('PZ/1/2026')
+    const documentNumberField = page.getByPlaceholder('ZPZ/1/2026')
     await documentNumberField.focus()
     await expect(documentNumberField).toBeFocused()
     await page.keyboard.type(documentNumber, { delay: 10 })
@@ -505,7 +505,7 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
     // Removing the focused control drops focus to the document, so the walk to Save starts
     // at the top of the page and crosses the whole sidebar — long, but reachable without a
     // mouse, which is what the acceptance criterion asks for.
-    const save = page.getByRole('button', { name: /Save goods receipt|Zapisz przyjęcie/i }).first()
+    const save = page.getByRole('button', { name: /Save goods receipt order|Zapisz zlecenie/i }).first()
     await tabUntilFocused(page, save, { limit: 200 })
     await page.keyboard.press('Enter')
 
@@ -539,7 +539,7 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
     await page.goto(`${INDEX_PATH}/create`)
     await hideDevDiagnostics(page)
 
-    const documentNumberField = page.getByPlaceholder('PZ/1/2026')
+    const documentNumberField = page.getByPlaceholder('ZPZ/1/2026')
     // The form autofocuses its first field on mount; typing before that happens lets the
     // hydrating controlled input reset what was typed.
     await expect(documentNumberField).toBeFocused()
@@ -562,7 +562,7 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
     await page.getByRole('textbox', { name: /Quantity, position 1|Ilość, pozycja 1/i }).fill('4')
 
     // Document Date is deliberately left empty, so the save is refused.
-    await page.getByRole('button', { name: /Save goods receipt|Zapisz przyjęcie/i }).first().click()
+    await page.getByRole('button', { name: /Save goods receipt order|Zapisz zlecenie/i }).first().click()
 
     // The form refuses the empty Document Date before it ever reaches the server, which is
     // the point: the user is told what is wrong without losing the rest of the screen.
