@@ -82,8 +82,8 @@ quantities cannot move while they are being counted against.
 _Avoid_: Start receiving, publish, send to warehouse, dispatch
 
 **Pallet**:
-A carrier the goods of one Goods Receipt are counted onto, identified by its own barcode.
-It belongs to that document and cannot outlive it.
+A carrier goods are counted onto, identified by its own barcode, with its own contents, location
+and history. It is created on a Goods Receipt and outlives it.
 _Avoid_: Palette, unit, handling unit, container, LPN
 
 **Pallet Line**:
@@ -98,3 +98,24 @@ _Avoid_: Finish, complete, seal, lock
 **Surplus**:
 A product counted on a Pallet that no Line of the Goods Receipt expected.
 _Avoid_: Extra, overdelivery, unexpected item, nadwyzka
+
+## Putaway
+
+**Placement**:
+A statement that the goods of one Pallet Line were put into, or moved to, a location in the stock
+ledger. Only a confirmed Placement is a fact.
+_Avoid_: Posting, stock entry, transaction, booking
+
+**Current Location**:
+Where a Pallet Line's goods stand now, read from its most recent confirmed Placement rather than
+stored. A Pallet whose lines sit in different locations has no single one.
+_Avoid_: Position, current position, stored location
+
+**Putaway**:
+The act of moving a received Pallet's goods from the location they were received into to the
+location they are stored in, within one warehouse.
+_Avoid_: Odłożenie, put-away, storage move, relocation, drop-off
+
+**Putaway Work**:
+The Pallets waiting to be put away in a warehouse. A list of work, not a list of Pallets.
+_Avoid_: Task list, queue, to-do, backlog
