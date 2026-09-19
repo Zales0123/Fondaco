@@ -10,6 +10,7 @@ import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
 import { SectionLabel } from './PanelUI'
 import { PanelLinkButton, ScreenEmpty, ScreenError, ScreenMessage } from './ReceivingStates'
 import {
+  fetchFailedPostings,
   fetchReceivingDocuments,
   resolveWarehouseLabel,
   searchWarehouses,
@@ -37,6 +38,17 @@ export function ReceivingDocuments({ assignedWarehouseId }: ReceivingDocumentsPr
   const { data, isLoading, error } = useQuery<ReceivingDocument[]>({
     queryKey: ['warehouseman.receiving.documents', warehouse],
     queryFn: () => fetchReceivingDocuments(warehouse),
+  })
+  /**
+   * A stock posting fails minutes after the delivery left this list, so there is no screen
+   * for it to appear on unless this one goes looking. It is polled rather than pushed
+   * because the failure happens in a worker the browser holds no channel to, and one small
+   * query a minute is the cheapest honest way to stop a stuck delivery going unnoticed.
+   */
+  const failed = useQuery<ReceivingDocument[]>({
+    queryKey: ['warehouseman.receiving.failedPostings', warehouse],
+    queryFn: () => fetchFailedPostings(warehouse),
+    refetchInterval: 60_000,
   })
 
   if (isLoading) return <ScreenMessage>{t('warehouseman.receiving.list.loading')}</ScreenMessage>
@@ -92,6 +104,8 @@ export function ReceivingDocuments({ assignedWarehouseId }: ReceivingDocumentsPr
         </label>
       ) : null}
 
+      <FailedPostings documents={failed.data ?? []} />
+
       {documents.length === 0 ? (
         <ScreenEmpty
           title={t('warehouseman.receiving.list.empty.title')}
@@ -142,6 +156,26 @@ function DocumentFact({ label, children }: { label: string; children: React.Reac
       <dt className="text-sm text-muted-foreground">{label}</dt>
       <dd className="truncate text-lg font-semibold">{children}</dd>
     </div>
+  )
+}
+
+/**
+ * Deliveries this floor confirmed whose goods never reached stock. It names them and says who
+ * fixes them: the causes are configuration the office owns, so offering the floor a retry
+ * here would offer them a button that cannot work (ADR-0011).
+ */
+function FailedPostings({ documents }: { documents: ReceivingDocument[] }) {
+  const t = useT()
+  if (documents.length === 0) return null
+  return (
+    <ScreenError>
+      <p className="font-bold">{t('warehouseman.receiving.posting.failedList')}</p>
+      <ul className="mt-1 flex flex-col gap-1 font-mono">
+        {documents.map((document) => (
+          <li key={document.id}>{document.documentNumber}</li>
+        ))}
+      </ul>
+    </ScreenError>
   )
 }
 

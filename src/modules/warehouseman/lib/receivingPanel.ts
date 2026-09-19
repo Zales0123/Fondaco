@@ -28,6 +28,17 @@ export function buildReceivingListQuery(warehouse: WarehouseFilter): Record<stri
   return query
 }
 
+/**
+ * The deliveries this floor finished whose goods never reached stock. Only the office can fix
+ * one, so the panel lists them to say "this is not done" rather than to offer an action
+ * (ADR-0011).
+ */
+export function buildFailedPostingsQuery(warehouse: WarehouseFilter): Record<string, string> {
+  const query: Record<string, string> = { status: 'confirmed', stockPostingStatus: 'failed', pageSize: '20' }
+  if (warehouse) query.warehouseId = warehouse
+  return query
+}
+
 /** A handheld scanner appends its own whitespace and a terminating newline. */
 export function normalizeScannedCode(raw: string): string {
   return raw.replace(/\s+/g, ' ').trim()

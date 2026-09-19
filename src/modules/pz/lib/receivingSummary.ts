@@ -7,7 +7,9 @@
  * nobody wrote is exactly the failure this screen exists to catch.
  */
 
-import { QUANTITY_SCALE } from './goodsReceiptInput'
+import type { GoodsReceiptStatus, StockPostingFailureReason, StockPostingStatus } from '../data/entities'
+import { fromScaledQuantity, toScaledQuantity } from './quantity'
+import type { ConfirmationBlocker } from './stockPosting'
 
 export type ReceivingSummaryPalletBreakdown = {
   palletId: string
@@ -30,9 +32,29 @@ export type ReceivingSummaryRow = {
   pallets: ReceivingSummaryPalletBreakdown[]
 }
 
+/**
+ * Expected and counted for the rows written in one unit. A document mixing cartons and
+ * pieces has one entry per unit, because adding them would produce a number that is true of
+ * nothing — and this total sits next to the button that posts the stock.
+ */
+export type ReceivingSummaryUnitTotal = {
+  /** `null` groups the rows carrying no unit, which includes every surplus row. */
+  unit: string | null
+  expected: string
+  counted: string
+}
+
 export type ReceivingSummary = {
   items: ReceivingSummaryRow[]
+  /**
+   * Kept because it is part of the published `receiving-summary` response and removing a
+   * response field is a breaking change. It sums across units and is therefore not rendered
+   * any more; read `totalsByUnit`.
+   *
+   * @deprecated Use `totalsByUnit`.
+   */
   totals: { expected: string; counted: string }
+  totalsByUnit: ReceivingSummaryUnitTotal[]
   palletCount: number
   palletsOpen: number
   palletsClosed: number
@@ -67,28 +89,6 @@ export type ReceivingSummaryInput = {
   pallets: ReceivingSummaryPallet[]
 }
 
-const SCALE_FACTOR = 10n ** BigInt(QUANTITY_SCALE)
-const DECIMAL = /^(-?)(\d*)(?:\.(\d*))?$/
-
-/**
- * Scaled integers rather than floats: adding `0.1` to `0.2` must not turn a matching
- * delivery into a difference of `0.0000000000000004`.
- */
-function toScaled(value: string): bigint {
-  const match = DECIMAL.exec(value.trim())
-  if (!match) return 0n
-  const [, sign, integer = '', fraction = ''] = match
-  const scaled =
-    BigInt(integer || '0') * SCALE_FACTOR + BigInt(fraction.slice(0, QUANTITY_SCALE).padEnd(QUANTITY_SCALE, '0'))
-  return sign === '-' ? -scaled : scaled
-}
-
-function fromScaled(value: bigint): string {
-  const negative = value < 0n
-  const digits = (negative ? -value : value).toString().padStart(QUANTITY_SCALE + 1, '0')
-  return `${negative ? '-' : ''}${digits.slice(0, -QUANTITY_SCALE)}.${digits.slice(-QUANTITY_SCALE)}`
-}
-
 type Accumulator = {
   catalogVariantId: string
   name: string | null
@@ -117,7 +117,7 @@ function accumulatorFor(rows: Map<string, Accumulator>, catalogVariantId: string
 
 function addExpected(rows: Map<string, Accumulator>, line: ReceivingSummaryExpectedLine): void {
   const row = accumulatorFor(rows, line.catalogVariantId)
-  row.expected = (row.expected ?? 0n) + toScaled(line.quantity)
+  row.expected = (row.expected ?? 0n) + toScaledQuantity(line.quantity)
   row.name ??= line.name
   row.sku ??= line.sku
   row.unit ??= line.unit
@@ -125,7 +125,7 @@ function addExpected(rows: Map<string, Accumulator>, line: ReceivingSummaryExpec
 
 function addCounted(rows: Map<string, Accumulator>, line: ReceivingSummaryPalletLine): void {
   const row = accumulatorFor(rows, line.catalogVariantId)
-  const quantity = toScaled(line.quantity)
+  const quantity = toScaledQuantity(line.quantity)
   row.counted += quantity
   row.name ??= line.name
   row.sku ??= line.sku
@@ -164,13 +164,13 @@ function toRow(row: Accumulator): ReceivingSummaryRow {
     name: row.name,
     sku: row.sku,
     unit: row.unit,
-    expected: row.expected === null ? null : fromScaled(row.expected),
-    counted: fromScaled(row.counted),
-    difference: fromScaled(difference),
+    expected: row.expected === null ? null : fromScaledQuantity(row.expected),
+    counted: fromScaledQuantity(row.counted),
+    difference: fromScaledQuantity(difference),
     surplus: row.expected === null,
     pallets: Array.from(row.pallets.values())
       .sort((left, right) => (left.code === right.code ? 0 : left.code < right.code ? -1 : 1))
-      .map((pallet) => ({ palletId: pallet.palletId, code: pallet.code, quantity: fromScaled(pallet.quantity) })),
+      .map((pallet) => ({ palletId: pallet.palletId, code: pallet.code, quantity: fromScaledQuantity(pallet.quantity) })),
   }
 }
 
@@ -189,6 +189,25 @@ function compareRows(left: Accumulator, right: Accumulator): number {
   return left.catalogVariantId < right.catalogVariantId ? -1 : 1
 }
 
+/** Named units first, alphabetically, so the unitless group never displaces a real one. */
+function buildUnitTotals(rows: readonly Accumulator[]): ReceivingSummaryUnitTotal[] {
+  const totals = new Map<string, { unit: string | null; expected: bigint; counted: bigint }>()
+  for (const row of rows) {
+    const key = row.unit ?? ''
+    const total = totals.get(key) ?? { unit: row.unit, expected: 0n, counted: 0n }
+    total.expected += row.expected ?? 0n
+    total.counted += row.counted
+    totals.set(key, total)
+  }
+  return Array.from(totals.values())
+    .sort((left, right) => compareNullableText(left.unit, right.unit))
+    .map((total) => ({
+      unit: total.unit,
+      expected: fromScaledQuantity(total.expected),
+      counted: fromScaledQuantity(total.counted),
+    }))
+}
+
 export function buildReceivingSummary(input: ReceivingSummaryInput): ReceivingSummary {
   const rows = new Map<string, Accumulator>()
   for (const line of input.expectedLines) addExpected(rows, line)
@@ -204,9 +223,30 @@ export function buildReceivingSummary(input: ReceivingSummaryInput): ReceivingSu
 
   return {
     items: ordered.map(toRow),
-    totals: { expected: fromScaled(expectedTotal), counted: fromScaled(countedTotal) },
+    totals: { expected: fromScaledQuantity(expectedTotal), counted: fromScaledQuantity(countedTotal) },
+    totalsByUnit: buildUnitTotals(ordered),
     palletCount: input.pallets.length,
     palletsOpen: input.pallets.filter((pallet) => pallet.status === 'open').length,
     palletsClosed: input.pallets.filter((pallet) => pallet.status === 'closed').length,
+  }
+}
+
+/**
+ * The summary as `/api/pz/goods-receipts/receiving-summary` answers it: the comparison plus
+ * everything a completion depends on. One response rather than two, so a screen can never
+ * offer a button for one state of the document while showing the counts of another.
+ */
+export type ReceivingSummaryResponse = ReceivingSummary & {
+  status: GoodsReceiptStatus
+  /** The version a completion sends in its optimistic-lock header. */
+  updatedAt: string | null
+  blockers: ConfirmationBlocker[]
+  defaultDestinationId: string | null
+  stockPosting: {
+    status: StockPostingStatus
+    postedAt: string | null
+    reason: StockPostingFailureReason | null
+    locationId: string | null
+    enabled: boolean
   }
 }

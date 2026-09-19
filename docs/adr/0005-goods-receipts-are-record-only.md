@@ -1,5 +1,11 @@
 # Goods receipts record a delivery; they do not move stock
 
+> **Superseded by [ADR-0011](0011-confirming-a-goods-receipt-posts-counted-stock.md).** Confirmation
+> now posts the counted quantities into `wms` stock through the seam described below. The reasoning
+> here is kept because it is why that seam exists and what it costs to close it; where the two
+> disagree — notably "per line", which ADR-0011 replaces with counted quantities summed per variant —
+> ADR-0011 wins.
+
 A warehouse receipt that leaves stock untouched is surprising enough to be worth writing down.
 Confirming a goods receipt does not call `wms.inventory.receive` and does not change any
 `wms` balance — the document is a record of what arrived, and nothing more. Stock posting brings

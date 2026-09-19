@@ -18,7 +18,7 @@ import {
 import { StatusBadge, type StatusBadgeVariant } from '@open-mercato/ui/primitives/status-badge'
 import { cn } from '@open-mercato/shared/lib/utils'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import type { ReceivingSummary, ReceivingSummaryRow } from '../lib/receivingSummary'
+import type { ReceivingSummary, ReceivingSummaryResponse, ReceivingSummaryRow } from '../lib/receivingSummary'
 
 const SUMMARY_COLUMN_COUNT = 5
 
@@ -93,12 +93,7 @@ export function ReceivingSummaryView({ summary, className }: { summary: Receivin
           <TableFooter role="rowgroup" className="block md:table-footer-group">
             <TableRow role="row" className="block md:table-row">
               <TableCell role="cell" colSpan={SUMMARY_COLUMN_COUNT} className="block md:table-cell">
-                <span aria-live="polite">
-                  {t('pz.receiving.summary.totals', undefined, {
-                    expected: formatQuantity(summary.totals.expected),
-                    counted: formatQuantity(summary.totals.counted),
-                  })}
-                </span>
+                <span aria-live="polite">{formatUnitTotals(summary.totalsByUnit, t)}</span>
               </TableCell>
             </TableRow>
           </TableFooter>
@@ -223,20 +218,41 @@ function withUnit(quantity: string, unit: string | null): string {
 }
 
 /**
+ * One total per unit. Cartons and pieces are not addable, and this line sits next to the
+ * button that posts the delivery into stock, so a single number summed across them would be
+ * a figure that is true of nothing.
+ */
+function formatUnitTotals(
+  totals: ReceivingSummary['totalsByUnit'],
+  t: ReturnType<typeof useT>,
+): string {
+  if (totals.length === 0) return t('pz.receiving.summary.totals.none')
+  return totals
+    .map((total) =>
+      t('pz.receiving.summary.totals.unit', undefined, {
+        unit: total.unit ?? t('pz.receiving.summary.totals.noUnit'),
+        expected: formatQuantity(total.expected),
+        counted: formatQuantity(total.counted),
+      }),
+    )
+    .join(' · ')
+}
+
+/**
  * The summary is derived on every read rather than cached: a Warehouseman refreshing it
  * mid-count is asking what is on the pallets right now.
  */
 export function useReceivingSummary(goodsReceiptId: string) {
-  const { data, isLoading, error } = useQuery<ReceivingSummary>({
+  const { data, isLoading, error, refetch } = useQuery<ReceivingSummaryResponse>({
     queryKey: ['pz.receivingSummary', goodsReceiptId],
     enabled: goodsReceiptId.length > 0,
     queryFn: async () => {
-      const result = await readApiResultOrThrow<ReceivingSummary>(
+      const result = await readApiResultOrThrow<ReceivingSummaryResponse>(
         `/api/pz/goods-receipts/receiving-summary?id=${encodeURIComponent(goodsReceiptId)}`,
       )
       if (!result) throw new Error('[internal] The receiving summary response was empty.')
       return result
     },
   })
-  return { data, isLoading, error }
+  return { data, isLoading, error, refetch }
 }

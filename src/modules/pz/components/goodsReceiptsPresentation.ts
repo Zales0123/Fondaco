@@ -107,7 +107,12 @@ export function useGoodsReceiptPermissions(): GoodsReceiptPermissions {
 }
 
 /** Domain transitions carry the version the user saw so a stale action fails closed. */
-export async function transitionGoodsReceipt(action: 'release' | 'withdraw' | 'confirm', id: string, expectedVersion: string | null): Promise<void> {
+export async function transitionGoodsReceipt(
+  action: 'release' | 'withdraw' | 'confirm' | 'retry-stock-posting',
+  id: string,
+  expectedVersion: string | null,
+  body: Record<string, unknown> = {},
+): Promise<void> {
   await withScopedApiRequestHeaders(buildOptimisticLockHeader(expectedVersion), async () => {
     const call = await apiCall<{
       error?: string
@@ -117,7 +122,7 @@ export async function transitionGoodsReceipt(action: 'release' | 'withdraw' | 'c
     }>(`/api/pz/goods-receipts/${action}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ id }),
+      body: JSON.stringify({ id, ...body }),
     })
     if (!call.response.ok) {
       // No English fallback here: an empty message is what makes every caller fall back to
@@ -127,8 +132,31 @@ export async function transitionGoodsReceipt(action: 'release' | 'withdraw' | 'c
   })
 }
 
-export function confirmGoodsReceipt(id: string, expectedVersion: string | null): Promise<void> {
-  return transitionGoodsReceipt('confirm', id, expectedVersion)
+export function confirmGoodsReceipt(
+  id: string,
+  expectedVersion: string | null,
+  destinationLocationId: string | null = null,
+): Promise<void> {
+  return transitionGoodsReceipt(
+    'confirm',
+    id,
+    expectedVersion,
+    destinationLocationId ? { destinationLocationId } : {},
+  )
+}
+
+/**
+ * Runs a failed Stock Posting again. It carries no version: the posting is not an edit of
+ * the document the office is looking at, and the command decides for itself whether there is
+ * anything left to post (ADR-0011).
+ */
+export function retryStockPosting(id: string, destinationLocationId: string | null = null): Promise<void> {
+  return transitionGoodsReceipt(
+    'retry-stock-posting',
+    id,
+    null,
+    destinationLocationId ? { destinationLocationId } : {},
+  )
 }
 
 export function surfaceGoodsReceiptConflict(error: unknown, t: (key: string, fallback?: string) => string): boolean {

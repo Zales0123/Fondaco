@@ -5,6 +5,7 @@ export const GOODS_RECEIPT_FEATURES = [
   'pz.goodsReceipts.manage',
   'pz.goodsReceipts.confirm',
   'pz.receiving.count',
+  'pz.receiving.confirm',
 ] as const
 
 /**

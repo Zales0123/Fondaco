@@ -186,3 +186,38 @@ describe('buildReceivingSummary', () => {
     expect(summary.palletCount).toBe(0)
   })
 })
+
+describe('buildReceivingSummary totals per unit', () => {
+  it('keeps cartons and pieces apart, because a sum of the two is true of nothing', () => {
+    const summary = buildReceivingSummary({
+      expectedLines: [
+        { catalogVariantId: 'v1', quantity: '3', unit: 'carton', name: 'Boxed', sku: null },
+        { catalogVariantId: 'v2', quantity: '5', unit: 'pcs', name: 'Loose', sku: null },
+      ],
+      palletLines: [
+        { palletId: 'p1', palletCode: 'P-1', catalogVariantId: 'v1', quantity: '2', name: 'Boxed', sku: null },
+        { palletId: 'p1', palletCode: 'P-1', catalogVariantId: 'v2', quantity: '5', name: 'Loose', sku: null },
+      ],
+      pallets: [{ id: 'p1', code: 'P-1', status: 'closed' }],
+    })
+
+    expect(summary.totalsByUnit).toEqual([
+      { unit: 'carton', expected: '3.0000', counted: '2.0000' },
+      { unit: 'pcs', expected: '5.0000', counted: '5.0000' },
+    ])
+  })
+
+  it('groups the rows carrying no unit last, which is where surplus rows land', () => {
+    const summary = buildReceivingSummary({
+      expectedLines: [{ catalogVariantId: 'v1', quantity: '1', unit: 'pcs', name: 'Known', sku: null }],
+      palletLines: [
+        { palletId: 'p1', palletCode: 'P-1', catalogVariantId: 'v1', quantity: '1', name: 'Known', sku: null },
+        { palletId: 'p1', palletCode: 'P-1', catalogVariantId: 'v9', quantity: '4', name: 'Surprise', sku: null },
+      ],
+      pallets: [{ id: 'p1', code: 'P-1', status: 'closed' }],
+    })
+
+    expect(summary.totalsByUnit.map((total) => total.unit)).toEqual(['pcs', null])
+    expect(summary.totalsByUnit[1]).toEqual({ unit: null, expected: '0.0000', counted: '4.0000' })
+  })
+})

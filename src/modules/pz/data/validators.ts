@@ -25,6 +25,10 @@ export const goodsReceiptListSchema = z
     sortField: z.string().optional(),
     sortDir: z.enum(['asc', 'desc']).optional(),
     status: z.union([goodsReceiptStatusSchema, z.literal('')]).optional(),
+    /** Narrows to the documents whose stock posting is in one state, such as the failed ones. */
+    stockPostingStatus: z
+      .union([z.enum(['not_applicable', 'pending', 'posted', 'failed']), z.literal('')])
+      .optional(),
     warehouseId: z.union([z.string().uuid(), z.literal('')]).optional(),
     documentDateFrom: optionalCalendarDay,
     documentDateTo: optionalCalendarDay,

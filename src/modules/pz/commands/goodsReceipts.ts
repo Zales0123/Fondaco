@@ -42,6 +42,8 @@ import {
   type GoodsReceiptUomSnapshot,
   type GoodsReceiptWarehouseSnapshot,
 } from '../data/entities'
+import { assessConfirmation, type ConfirmationAssessment } from '../lib/receivingConfirmation'
+import type { ConfirmationBlocker } from '../lib/stockPosting'
 import {
   parseGoodsReceiptWriteInput,
   utcToday,
@@ -1499,12 +1501,78 @@ async function snapshotWarehouseForConfirmation(
   return { name: warehouse.name ?? '', code: warehouse.code ?? '' }
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 /**
- * Confirming records that a delivery happened. It moves no stock: no `wms` balance,
- * movement, lot or reservation is created or changed, and `wms.inventory.receive` is not
- * called (ADR-0005). What it emits is `pz.goods_receipt.confirmed`, carrying the header and
- * its lines, which is the seam a stock-posting subscriber would attach to later without
- * touching this module.
+ * The destination the caller chose, if any. Absent means "use whatever the Warehouse
+ * preselects"; a malformed value is refused rather than ignored, because ignoring it would
+ * post the delivery somewhere nobody picked.
+ */
+export function readDestinationInput(raw: unknown, translate: TranslateFn): string | null {
+  const source = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+  const body = source.body && typeof source.body === 'object' ? (source.body as Record<string, unknown>) : {}
+  const value = [source.destinationLocationId, body.destinationLocationId].find((entry) => entry !== undefined)
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'string' || !UUID_PATTERN.test(value)) {
+    throw badRequest(
+      translate('pz.receiving.errors.destinationInvalid', 'That destination is not a location of this warehouse.'),
+    )
+  }
+  return value
+}
+
+/**
+ * Turns a posting blocker into the refusal the caller sees. Status, pallet and line blockers
+ * are raised by the confirm command's own checks with their own messages, so only the ones
+ * the Stock Posting introduced are mapped here.
+ */
+export function stockPostingBlockerError(blocker: ConfirmationBlocker, translate: TranslateFn): CrudHttpError | null {
+  switch (blocker.kind) {
+    case 'trackedVariants':
+      return conflict(
+        translate(
+          'pz.receiving.errors.trackedVariants',
+          'These products are tracked by lot or serial number and cannot be received yet: {products}.',
+          { products: blocker.products.join(', ') },
+        ),
+      )
+    case 'noEligibleDestination':
+      return conflict(
+        translate(
+          'pz.receiving.errors.noEligibleDestination',
+          'This warehouse has no location the goods can be put into.',
+        ),
+      )
+    case 'destinationRequired':
+      return conflict(
+        translate('pz.receiving.errors.destinationRequired', 'Choose where the goods are put before finishing.'),
+      )
+    case 'destinationInvalid':
+      return conflict(
+        translate('pz.receiving.errors.destinationInvalid', 'That destination is not a location of this warehouse.'),
+      )
+    default:
+      return null
+  }
+}
+
+function assertPostable(assessment: ConfirmationAssessment, translate: TranslateFn): void {
+  for (const blocker of assessment.blockers) {
+    const error = stockPostingBlockerError(blocker, translate)
+    if (error) throw error
+  }
+}
+
+/**
+ * Confirming records that a delivery happened and, when the Stock Posting toggle is on,
+ * starts putting the counted goods into `wms` stock. It does not post them itself: it pins
+ * the destination, marks the posting pending, and emits `pz.goods_receipt.confirmed`, which
+ * a subscriber picks up after the commit (ADR-0011, superseding ADR-0005). With the toggle
+ * off the document is confirmed and records that no posting applies, exactly as before.
+ *
+ * Every posting precondition is checked here, before the one-way transition, and for both
+ * callers: the office's confirm and the floor's completion dispatch this same command, so
+ * neither can finalise a delivery the other could not have posted.
  *
  * It is its own command rather than a status written through update, because it carries its
  * own permission and its own one-way transition (ADR-0006), and it is deliberately not
@@ -1517,7 +1585,9 @@ const confirmGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsR
     const { translate } = await resolveTranslations()
     const scope = ensureGoodsReceiptScope(ctx, translate)
     const id = requireRecordId(rawInput, translate)
+    const requestedDestinationId = readDestinationInput(rawInput, translate)
     const expectedVersion = requireExpectedVersion(ctx, translate)
+    const confirmedBy = typeof ctx.auth?.sub === 'string' ? ctx.auth.sub : null
 
     const em = (ctx.container.resolve('em') as EntityManager).fork()
 
@@ -1576,8 +1646,31 @@ const confirmGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsR
             receipt.warehouseId,
             translate,
           )
+
+          // Read under the lock the first phase took, so the destination pinned below is
+          // eligible as of this write rather than as of whenever the screen last looked.
+          const assessment = await assessConfirmation(
+            {
+              em: tx,
+              queryEngine: ctx.container.resolve<QueryEngine>('queryEngine'),
+              resolve: (name) => ctx.container.resolve(name),
+            },
+            scope,
+            { id, status: receipt.status, warehouseId: receipt.warehouseId, lineCount: lines.length },
+            requestedDestinationId,
+          )
+          assertPostable(assessment, translate)
+
+          const confirmedAt = new Date()
           receipt.status = 'confirmed'
-          receipt.updatedAt = new Date()
+          receipt.confirmedBy = confirmedBy
+          receipt.confirmedAt = confirmedAt
+          receipt.stockPostingLocationId = assessment.destinationId
+          // Pending even when nothing was counted: the subscriber is the only writer of
+          // `posted`, so an empty delivery reaches it by the same path as a full one.
+          receipt.stockPostingStatus = assessment.postingEnabled ? 'pending' : 'not_applicable'
+          receipt.stockPostingError = null
+          receipt.updatedAt = confirmedAt
           tx.persist(receipt)
         },
       ],

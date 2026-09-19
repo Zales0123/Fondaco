@@ -40,8 +40,11 @@ export const setup: ModuleSetupConfig = {
     superadmin: ['warehouseman.panel.access', 'entities.definitions.view'],
     admin: ['warehouseman.panel.access', 'entities.definitions.view'],
     // Receiving lives in `pz`, so the floor's grants are `pz.*` features: read the released
-    // documents and count onto their pallets. Deliberately not `pz.goodsReceipts.manage` —
-    // the floor counts a delivery, it does not edit the paperwork it is counted against.
+    // documents, count onto their pallets, and finish the delivery once it is counted.
+    // Deliberately not `pz.goodsReceipts.manage` — the floor counts a delivery, it does not
+    // edit the paperwork it is counted against — and deliberately not
+    // `pz.goodsReceipts.confirm`, which is the office's word for the same transition and
+    // carries every office confirm surface with it (ADR-0011).
     //
     // The two read-only grants that follow are what the counting screens actually resolve
     // their pickers against, and `pz/acl.ts` already declares both as dependencies of the
@@ -60,6 +63,7 @@ export const setup: ModuleSetupConfig = {
       'warehouseman.panel.access',
       'pz.goodsReceipts.view',
       'pz.receiving.count',
+      'pz.receiving.confirm',
       'wms.view',
       'catalog.products.view',
       'label_printing.print',

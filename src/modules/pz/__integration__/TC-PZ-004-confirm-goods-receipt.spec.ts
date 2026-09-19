@@ -7,9 +7,13 @@ import { adoptSession, hideDevDiagnostics } from './browserSession'
  * has since been deleted, and the two refusals a confirmed document owes everyone —
  * update and delete — whatever the UI offers.
  *
- * It also pins the decision that surprises people most: confirming moves no stock
- * (ADR-0005). The `wms` balances, movements, lots and reservations are counted either side
- * of a confirmation and asserted unchanged.
+ * Only a document the office has released can be confirmed (ADR-0008), so every case here
+ * releases first; the transition itself is what is under test, not how it got there.
+ *
+ * It also pins what confirmation does to stock with the Stock Posting toggle off, which is
+ * how it ships: nothing at all. The `wms` balances, movements, lots and reservations are
+ * read either side of a confirmation and asserted unchanged. Posting with the toggle on is
+ * TC-PZ-007's subject (ADR-0011).
  */
 
 const ADMIN = { email: 'admin@acme.com', password: 'secret' }
@@ -18,6 +22,7 @@ const RUN = Date.now()
 const INDEX_PATH = '/backend/wms/goods-receipts'
 const API = '/api/pz/goods-receipts'
 const CONFIRM_API = '/api/pz/goods-receipts/confirm'
+const RELEASE_API = '/api/pz/goods-receipts/release'
 const LOCK_HEADER = 'x-om-ext-optimistic-lock-expected-updated-at'
 const MANAGER_PASSWORD = 'Warehouse123!'
 
@@ -120,6 +125,26 @@ test.describe('TC-PZ-004 confirm a goods receipt', () => {
     )
   }
 
+  /** The office hands the document to the floor; only then can it be confirmed (ADR-0008). */
+  async function release(request: APIRequestContext, id: string): Promise<void> {
+    const current = await readGoodsReceipt(request, id)
+    const response = await request.post(RELEASE_API, {
+      headers: { [LOCK_HEADER]: current.updatedAt ?? '' },
+      data: { id },
+      failOnStatusCode: false,
+    })
+    expect(response.status(), await response.text()).toBe(200)
+  }
+
+  async function createReleased(
+    request: APIRequestContext,
+    overrides: Record<string, unknown> = {},
+  ): Promise<{ id: string; documentNumber: string }> {
+    const draft = await createDraft(request, overrides)
+    await release(request, draft.id)
+    return draft
+  }
+
   async function createDraft(
     request: APIRequestContext,
     overrides: Record<string, unknown> = {},
@@ -204,8 +229,8 @@ test.describe('TC-PZ-004 confirm a goods receipt', () => {
     await manager?.dispose()
   })
 
-  test('confirms a draft, snapshots its warehouse and moves no stock', async () => {
-    const draft = await createDraft(admin)
+  test('confirms a released document, snapshots its warehouse and moves no stock', async () => {
+    const draft = await createReleased(admin)
     const before = await readGoodsReceipt(admin, draft.id)
     expect(before.warehouseSnapshot).toBeNull()
     const stockBefore = await readWmsRecords(admin)
@@ -223,12 +248,12 @@ test.describe('TC-PZ-004 confirm a goods receipt', () => {
     expect(after.warehouseSnapshot?.name).toBe(`PZ QA confirm warehouse main ${RUN}`)
     expect(after.warehouseSnapshot?.code).toBe(`PZQACmain${RUN}`)
 
-    // ADR-0005: a goods receipt records a delivery, it does not move stock.
+    // With the Stock Posting toggle off, confirmation still only records a delivery.
     expect(await readWmsRecords(admin)).toEqual(stockBefore)
   })
 
   test('is one-way: a confirmed goods receipt refuses confirm, update and delete', async () => {
-    const draft = await createDraft(admin)
+    const draft = await createReleased(admin)
     const opened = await readGoodsReceipt(admin, draft.id)
     const first = await admin.post(CONFIRM_API, {
       headers: { [LOCK_HEADER]: opened.updatedAt ?? '' },
@@ -295,18 +320,20 @@ test.describe('TC-PZ-004 confirm a goods receipt', () => {
     const afterEdit = await readGoodsReceipt(admin, draft.id)
     expect(afterEdit.supplierName).toBe('Hurtownia Magazyniera')
 
+    await release(admin, draft.id)
+    const released = await readGoodsReceipt(admin, draft.id)
     const refused = await manager.post(CONFIRM_API, {
-      headers: { [LOCK_HEADER]: afterEdit.updatedAt ?? '' },
+      headers: { [LOCK_HEADER]: released.updatedAt ?? '' },
       data: { id: draft.id },
       failOnStatusCode: false,
     })
     expect(refused.status(), await refused.text()).toBe(403)
-    expect((await readGoodsReceipt(admin, draft.id)).status).toBe('draft')
+    expect((await readGoodsReceipt(admin, draft.id)).status).toBe('receiving')
   })
 
   test('refuses to confirm into a warehouse that has since been deleted', async () => {
     const doomedWarehouseId = await createWarehouse(admin, 'doomed')
-    const draft = await createDraft(admin, { warehouseId: doomedWarehouseId })
+    const draft = await createReleased(admin, { warehouseId: doomedWarehouseId })
     const current = await readGoodsReceipt(admin, draft.id)
 
     const removed = await admin.delete(`/api/wms/warehouses?id=${encodeURIComponent(doomedWarehouseId)}`, {
@@ -321,7 +348,7 @@ test.describe('TC-PZ-004 confirm a goods receipt', () => {
     })
     expect(refused.status(), await refused.text()).toBe(409)
     // Surfaced as a data problem rather than frozen into the record.
-    expect((await readGoodsReceipt(admin, draft.id)).status).toBe('draft')
+    expect((await readGoodsReceipt(admin, draft.id)).status).toBe('receiving')
   })
 
   test('offers no way to un-confirm', async () => {
@@ -336,30 +363,26 @@ test.describe('TC-PZ-004 confirm a goods receipt', () => {
   test('offers a Confirm control that warns before it takes effect, and closes the document', async ({ context, page }) => {
     test.setTimeout(120_000)
     await adoptSession(context, adminCookies)
-    const draft = await createDraft(admin)
+    const draft = await createReleased(admin)
 
-    await page.goto(`${INDEX_PATH}/${draft.id}/edit`)
+    // Confirmation lives on the document, not among the edit form's inputs: a released
+    // document has no edit screen at all (ADR-0008).
+    await page.goto(`${INDEX_PATH}/${draft.id}`)
     await hideDevDiagnostics(page)
-
-    // Confirmation is an action beside the form, not a status field among the inputs.
     await expect(page.getByRole('combobox', { name: /Status/i })).toHaveCount(0)
+
     const confirmControl = page.getByRole('button', { name: /^(Confirm|Zatwierdź)$/ }).first()
     await expect(confirmControl).toBeVisible()
     await confirmControl.click()
 
     // Nothing happens until the user is told it cannot be undone.
     await expect(page.getByText(/cannot be undone|nie można go cofnąć/i).first()).toBeVisible()
-    expect((await readGoodsReceipt(admin, draft.id)).status).toBe('draft')
+    expect((await readGoodsReceipt(admin, draft.id)).status).toBe('receiving')
 
     await page.getByRole('button', { name: /Confirm goods receipt order|Zatwierdź zlecenie/i }).first().click()
-    await page.waitForURL(new RegExp(`${INDEX_PATH}(\\?|$)`))
-
-    // The index is read through the same endpoint the table renders, with its list cache
-    // disabled, so the document is confirmed there the moment the user lands back on it.
-    // The badge itself is not asserted in the page: the index has no filter or search yet
-    // (#20), so which page a given row falls on depends on how much data the run left
-    // behind.
-    expect((await readGoodsReceipt(admin, draft.id)).status).toBe('confirmed')
+    await expect
+      .poll(async () => (await readGoodsReceipt(admin, draft.id)).status, { timeout: 15_000 })
+      .toBe('confirmed')
 
     // Reopening it offers no way back: the edit screen refuses rather than re-rendering
     // the form.

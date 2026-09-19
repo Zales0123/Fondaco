@@ -1,7 +1,14 @@
 "use client"
 import { apiCall, readApiResultOrThrow, withScopedApiRequestHeaders } from '@open-mercato/ui/backend/utils/apiCall'
 import { buildOptimisticLockHeader } from '@open-mercato/ui/backend/utils/optimisticLock'
-import { buildReceivingListQuery, type WarehouseFilter } from './receivingPanel'
+import { buildFailedPostingsQuery, buildReceivingListQuery, type WarehouseFilter } from './receivingPanel'
+
+export type StockPostingState = {
+  status: 'not_applicable' | 'pending' | 'posted' | 'failed'
+  postedAt: string | null
+  reason: string | null
+  locationId: string | null
+}
 
 export type ReceivingDocument = {
   id: string
@@ -11,6 +18,7 @@ export type ReceivingDocument = {
   warehouseId: string
   warehouseSnapshot: { name: string; code: string } | null
   palletCount: number
+  stockPosting: StockPostingState
   updatedAt: string | null
 }
 
@@ -120,6 +128,31 @@ export async function fetchReceivingDocument(id: string): Promise<ReceivingDocum
     `/api/pz/goods-receipts?ids=${encodeURIComponent(id)}&pageSize=1`,
   )
   return items[0] ?? null
+}
+
+/** The confirmed deliveries whose goods never reached stock — the floor's only unfinished business. */
+export async function fetchFailedPostings(warehouse: WarehouseFilter): Promise<ReceivingDocument[]> {
+  const query = new URLSearchParams(buildFailedPostingsQuery(warehouse))
+  return readList<ReceivingDocument>(`/api/pz/goods-receipts?${query.toString()}`)
+}
+
+/**
+ * Finishes the delivery: confirms the document and starts the stock posting. The version is
+ * what makes a completion fail closed when somebody counted onto it since this screen loaded.
+ */
+export async function confirmDelivery(input: {
+  id: string
+  destinationLocationId: string | null
+  expectedVersion: string | null
+}): Promise<{ id: string; status: string; updatedAt: string | null }> {
+  return send<{ id: string; status: string; updatedAt: string | null }>(
+    '/api/pz/receiving/confirm',
+    'POST',
+    input.destinationLocationId
+      ? { id: input.id, destinationLocationId: input.destinationLocationId }
+      : { id: input.id },
+    input.expectedVersion,
+  )
 }
 
 export async function fetchPallets(goodsReceiptId: string): Promise<Pallet[]> {
