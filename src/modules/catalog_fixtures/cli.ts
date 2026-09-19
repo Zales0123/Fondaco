@@ -2,6 +2,7 @@ import type { ModuleCli } from '@open-mercato/shared/modules/registry'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { assignFixtureBarcodes } from './lib/seed'
+import { seedBeverageProducts } from './lib/seedProducts'
 
 function parseArgs(rest: string[]): Record<string, string> {
   const args: Record<string, string> = {}
@@ -100,6 +101,45 @@ const assignBarcodes: ModuleCli = {
   },
 }
 
+const seedProducts: ModuleCli = {
+  command: 'seed-products',
+  async run(rest) {
+    const args = parseArgs(rest)
+    const container = await createRequestContainer()
+    try {
+      const em = container.resolve<EntityManager>('em')
+      let scope: { tenantId: string; organizationId: string; inferred: boolean }
+      try {
+        scope = await resolveScope(em, {
+          tenantId: args.tenant ?? args.tenantId,
+          organizationId: args.org ?? args.orgId ?? args.organizationId,
+        })
+      } catch (err) {
+        console.error(err instanceof Error ? err.message : String(err))
+        console.error('Usage: mercato catalog_fixtures seed-products [--tenant <id>] [--org <id>]')
+        process.exitCode = 1
+        return
+      }
+      if (scope.inferred) {
+        console.log(`Auto-detected scope: tenant=${scope.tenantId}, org=${scope.organizationId}`)
+      }
+
+      const summary = await seedBeverageProducts(em, container, scope)
+
+      console.log('🥤 Catalog fixture products:')
+      console.log(`   ${summary.created} created, ${summary.skipped} already present`)
+      console.log(`   ${summary.images} images attached`)
+      for (const failure of summary.failed) {
+        console.log(`   ⚠️  ${failure.handle}: ${failure.reason}`)
+      }
+      if (summary.failed.length) process.exitCode = 1
+    } finally {
+      const disposable = container as unknown as { dispose?: () => Promise<void> }
+      if (typeof disposable.dispose === 'function') await disposable.dispose()
+    }
+  },
+}
+
 const statusCommand: ModuleCli = {
   command: 'status',
   async run(rest) {
@@ -141,6 +181,6 @@ const statusCommand: ModuleCli = {
   },
 }
 
-const commands = [assignBarcodes, statusCommand]
+const commands = [seedProducts, assignBarcodes, statusCommand]
 
 export default commands
