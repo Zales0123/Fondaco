@@ -1,6 +1,5 @@
-import { readFile } from 'node:fs/promises'
-import path from 'node:path'
 import { z } from 'zod'
+import type { EntityManager } from '@mikro-orm/postgresql'
 import { getAuthFromCookies } from '@open-mercato/shared/lib/auth/server'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { createLogger } from '@open-mercato/shared/lib/logger'
@@ -14,6 +13,14 @@ import {
 import { PrinterBusyError } from '../../lib/printQueue'
 import { PrinterError } from '../../lib/niimbotPrinter'
 import { RasterizeError } from '../../lib/rasterize'
+import { BarcodeRenderError, renderBarcodeLabel } from '../../lib/barcodeImage'
+import { readLabelGeometry } from '../../lib/labelGeometry'
+import {
+  LABEL_SCOPE_IDS,
+  LabelNotAvailableError,
+  resolveLabelSubject,
+  type LabelScopeId,
+} from '../../lib/labelScopes'
 
 const logger = createLogger('label_printing').child({ component: 'print-label-route' })
 
@@ -21,17 +28,9 @@ export const metadata = {
   POST: { requireAuth: true, requireFeatures: ['label_printing.print'] },
 }
 
-/**
- * First iteration prints one fixed label for every product.
- *
- * `productId` is accepted, validated and logged but does not yet change the
- * output — it is here so the client contract does not have to change when real
- * per-product barcode rendering replaces the fixed asset.
- */
-const LABEL_ASSET_PATH = path.join(process.cwd(), 'src/modules/label_printing/assets/barcode.gif')
-
 const requestSchema = z.object({
-  productId: z.string().min(1).max(200),
+  scope: z.enum(LABEL_SCOPE_IDS as [LabelScopeId, ...LabelScopeId[]]),
+  id: z.string().uuid(),
 })
 
 /**
@@ -45,6 +44,15 @@ function describeFailure(error: unknown): {
   key: string
   fallback: string
 } {
+  if (error instanceof LabelNotAvailableError) {
+    // A refusal, not a fault: the record simply has nothing printable.
+    return {
+      status: 422,
+      code: error.code,
+      key: error.messageKey,
+      fallback: 'There is no barcode to print for this record.',
+    }
+  }
   if (error instanceof PrinterBusyError) {
     return {
       status: 409,
@@ -59,6 +67,14 @@ function describeFailure(error: unknown): {
       code: error.code,
       key: 'label_printing.print.error.unavailable',
       fallback: 'The label printer is not reachable. Check that it is switched on and paired.',
+    }
+  }
+  if (error instanceof BarcodeRenderError) {
+    return {
+      status: 500,
+      code: error.code,
+      key: 'label_printing.print.error.render',
+      fallback: 'The barcode could not be rendered onto the label.',
     }
   }
   if (error instanceof RasterizeError) {
@@ -106,13 +122,31 @@ export async function POST(request: Request) {
 
   try {
     const container = await createRequestContainer()
-    const printer = container.resolve<LabelPrinterService>(LABEL_PRINTER_SERVICE)
+    const em = container.resolve<EntityManager>('em')
 
-    const image = await readFile(LABEL_ASSET_PATH)
+    // Scope comes from the session, never the payload: the record id is
+    // caller-supplied, so the lookup is constrained to the caller's own tenant
+    // and organization and a foreign id simply resolves to nothing.
+    const subject = await resolveLabelSubject(parsed.data.scope, parsed.data.id, {
+      em,
+      tenantId: auth.tenantId,
+      organizationId: auth.orgId,
+    })
+
+    const image = await renderBarcodeLabel({
+      symbology: subject.symbology,
+      value: subject.value,
+      geometry: readLabelGeometry(),
+    })
+
+    const printer = container.resolve<LabelPrinterService>(LABEL_PRINTER_SERVICE)
     await printer.printImage(image)
 
     logger.info('Printed label', {
-      productId: parsed.data.productId,
+      scope: parsed.data.scope,
+      id: parsed.data.id,
+      subject: subject.describe,
+      symbology: subject.symbology,
       tenantId: auth.tenantId,
       organizationId: auth.orgId,
     })
@@ -122,7 +156,7 @@ export async function POST(request: Request) {
     })
   } catch (error) {
     const failure = describeFailure(error)
-    const logPayload = { err: error, productId: parsed.data.productId }
+    const logPayload = { err: error, scope: parsed.data.scope, id: parsed.data.id }
     if (failure.status >= 500) logger.error('Label print failed', logPayload)
     else logger.warn('Label print rejected', logPayload)
 
@@ -137,9 +171,13 @@ const labelPrintingTag = 'LabelPrinting'
 const errorSchema = z.object({ error: z.string(), code: z.string().optional() })
 
 const printLabelDoc: OpenApiMethodDoc = {
-  summary: 'Print a product label on the NiimBot B1',
+  summary: 'Print a barcode label on the NiimBot B1',
   description:
-    'Sends the configured label image to the serial label printer and waits for the printer to report the job finished. The printer is an exclusive resource, so a concurrent request is rejected with 409 rather than queued. In this first iteration the printed image is a fixed asset and `productId` only identifies the request in the logs.',
+    'Resolves the record into a barcode value and symbology, renders it onto the configured '
+    + 'label geometry and sends it to the serial label printer. For `catalog.product` the value '
+    + "is the default variant's GTIN; a product whose variant carries no barcode is refused with "
+    + '422 rather than printed blank. The printer is an exclusive resource, so a concurrent '
+    + 'request is rejected with 409 rather than queued.',
   tags: [labelPrintingTag],
   responses: [
     {
@@ -152,6 +190,7 @@ const printLabelDoc: OpenApiMethodDoc = {
     { status: 400, description: 'Invalid body or missing organization scope', schema: errorSchema },
     { status: 401, description: 'Authentication required', schema: errorSchema },
     { status: 409, description: 'The printer is already printing', schema: errorSchema },
+    { status: 422, description: 'The record has no printable barcode', schema: errorSchema },
     { status: 502, description: 'The printer reported an error or never finished', schema: errorSchema },
     { status: 503, description: 'No printer configured or the serial port could not be opened', schema: errorSchema },
     { status: 500, description: 'Unexpected server error', schema: errorSchema },

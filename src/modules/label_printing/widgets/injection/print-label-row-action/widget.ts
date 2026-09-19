@@ -41,7 +41,7 @@ async function printLabel(productId: string): Promise<void> {
     const { ok, result } = await apiCall<PrintLabelResponse>('/api/label_printing/print-label', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ productId }),
+      body: JSON.stringify({ scope: 'catalog.product', id: productId }),
     })
 
     if (!ok) {

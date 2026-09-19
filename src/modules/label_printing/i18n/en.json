@@ -5,5 +5,10 @@
   "label_printing.print.error.unavailable": "The label printer is not reachable. Check that it is switched on and paired.",
   "label_printing.print.error.image": "The label image could not be prepared for printing.",
   "label_printing.print.error.printer": "The printer reported a problem and did not finish the label.",
-  "label_printing.print.error.unexpected": "The label could not be printed."
+  "label_printing.print.error.unexpected": "The label could not be printed.",
+  "label_printing.print.error.noBarcode": "This product's variant has no barcode, so there is nothing to print. Add a GTIN to the variant first.",
+  "label_printing.print.error.noVariant": "This product has no active variant to print a label for.",
+  "label_printing.print.error.ambiguousVariant": "This product has several variants and no default one, so the label would be ambiguous. Mark a default variant first.",
+  "label_printing.print.error.unsupportedGtin": "This variant's identifier type cannot be printed as a barcode.",
+  "label_printing.print.error.render": "The barcode could not be rendered onto the label."
 }

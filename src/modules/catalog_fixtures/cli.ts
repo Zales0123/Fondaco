@@ -141,4 +141,6 @@ const statusCommand: ModuleCli = {
   },
 }
 
-export default [assignBarcodes, statusCommand]
+const commands = [assignBarcodes, statusCommand]
+
+export default commands

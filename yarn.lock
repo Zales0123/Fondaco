@@ -10210,6 +10210,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"bwip-js@npm:^4.11.4":
+  version: 4.11.4
+  resolution: "bwip-js@npm:4.11.4"
+  bin:
+    bwip-js: bin/bwip-js.js
+  checksum: 10c0/084424c9e1dae29bc6218cdd94739c0f51a8f403e2b94f3ef9b246ac5a5b465f3b747943b23331676a3e8b3764db8536c53c1afaff37773896ea4261e1290b50
+  languageName: node
+  linkType: hard
+
 "byline@npm:^5.0.0":
   version: 5.0.0
   resolution: "byline@npm:5.0.0"
@@ -12901,6 +12910,7 @@ __metadata:
     better-sqlite3: "npm:^13.0.3"
     bullmq: "npm:^6.0.9"
     bullmq-otel: "npm:^1.3.1"
+    bwip-js: "npm:^4.11.4"
     class-variance-authority: "npm:^0.7.1"
     clsx: "npm:^2.1.1"
     cross-env: "npm:^10.1.0"

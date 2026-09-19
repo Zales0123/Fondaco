@@ -10,7 +10,7 @@ import { RasterizeError } from '../lib/rasterize'
 import { createFakePrinter } from '../testing/fakeSerialTransport'
 import type { SerialTransport } from '../lib/types'
 
-const assetPath = path.join(__dirname, '..', 'assets', 'barcode.gif')
+const assetPath = path.join(__dirname, 'fixtures', 'barcode.gif')
 const config = { portPath: '/dev/tty.fake', density: 3, labelType: 1, jobTimeoutMs: 10_000 }
 
 function serviceWith(openTransport: (portPath: string) => Promise<SerialTransport>) {

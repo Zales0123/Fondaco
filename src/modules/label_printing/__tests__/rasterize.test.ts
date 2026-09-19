@@ -2,7 +2,7 @@
  * Differential test against the reference Python implementation.
  *
  * `fixtures/barcode-rows.json` was produced by running `niimctl.py`'s exact
- * rasterization loop over `assets/barcode.gif`. If this test passes, the port's
+ * rasterization loop over `fixtures/barcode.gif`. If this test passes, the port's
  * bitmap output is byte-identical to the implementation known to drive the
  * printer correctly — which is the only correctness oracle available for an
  * undocumented protocol.
@@ -24,7 +24,7 @@ type Golden = {
   printPx: number[]
 }
 
-const assetPath = path.join(__dirname, '..', 'assets', 'barcode.gif')
+const assetPath = path.join(__dirname, 'fixtures', 'barcode.gif')
 const goldenPath = path.join(__dirname, 'fixtures', 'barcode-rows.json')
 
 async function loadGolden(): Promise<Golden> {
