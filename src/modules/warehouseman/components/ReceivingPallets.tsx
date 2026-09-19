@@ -13,6 +13,7 @@ import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { BarcodeScannerDialog } from '@/modules/barcode_scanner/components/BarcodeScannerDialog'
 import { PANEL_PRIMARY, PanelFooter, ScanField, SectionLabel } from './PanelUI'
 import { PanelLinkButton, ScreenEmpty, ScreenError, ScreenMessage } from './ReceivingStates'
+import { ReceivingExpectedContents } from './ReceivingExpectedContents'
 import {
   createPallet,
   deletePallet,
@@ -287,6 +288,15 @@ export function ReceivingPallets({ receiptId }: ReceivingPalletsProps) {
           ))}
         </ul>
       )}
+
+      {/* Under the pallets, never above them: the floor's own work stays the first thing on
+          the screen, and what the paperwork claims is what they check it against. */}
+      <ReceivingExpectedContents
+        lines={document.data?.lines ?? null}
+        loading={document.isLoading}
+        error={document.error}
+        loaded={Boolean(document.data)}
+      />
 
       <PanelFooter>
         <Button
