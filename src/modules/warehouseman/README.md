@@ -11,7 +11,7 @@ decisions that shape it.
 | `/warehouseman/login` | The panel's own sign-in page. Public, glove-sized. |
 | `/warehouseman` | Panel home: header plus the four action buttons. |
 | `/warehouseman/receiving` | Goods receipt — a stub action. |
-| `/warehouseman/scan` | Scan product — a stub action. |
+| `/warehouseman/scan` | Scan product — a scan opens the camera and answers what the code is and how much of it is in stock. |
 | `/warehouseman/transfer` | Transfer — a stub action. |
 | `/warehouseman/stocktake` | Stocktake — a stub action. |
 
@@ -19,6 +19,16 @@ Every stub action states that the operation is not available yet and offers one 
 back to the home screen. None of them changes any data. Building one for real means
 replacing that screen's body: the route, the access gate and the shell are already in
 place.
+
+`/warehouseman/scan` is read-only — it looks a barcode up and shows the answer. Because
+it writes nothing, the camera opens as the screen does: the warehouseman is already
+holding the item, and a second tap to start the camera buys nothing. The barcode lookup
+is the receiving screen's own, so a code that names a product while counting a delivery
+names the same product here; stock comes from the installed WMS balances endpoint, which
+the Warehouseman role already reads through `wms.view`. The buckets that endpoint returns
+are summed per warehouse — a bin-level breakdown is not a question anyone holding a
+scanner is asking. Typing the code stays the path that always works: over plain http a
+phone has no secure context and therefore no camera at all.
 
 The header names the assigned warehouse and the signed-in person on every screen, and
 carries the sign-out control. A warehouseman with no assigned warehouse is told so and

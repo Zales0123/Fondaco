@@ -1,5 +1,5 @@
 import { PanelShell } from '../../../components/PanelShell'
-import { StubAction } from '../../../components/StubAction'
+import { ProductScan } from '../../../components/ProductScan'
 import { loadPanelContext } from '../../../lib/panelContext'
 
 export default async function ScanPage() {
@@ -12,7 +12,7 @@ export default async function ScanPage() {
       backHref="/warehouseman"
       backLabelKey="warehouseman.panel.backToHome"
     >
-      <StubAction titleKey="warehouseman.actions.scan" />
+      <ProductScan />
     </PanelShell>
   )
 }
