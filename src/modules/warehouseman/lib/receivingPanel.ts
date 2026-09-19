@@ -63,6 +63,17 @@ export function parseCountQuantity(raw: string): string | null {
   return `${integer || '0'}.${fraction}`
 }
 
+/**
+ * Blank means one unit: a scan is the gesture that says "one more of these". The quantity
+ * field is therefore a multiplier rather than a required entry — left alone a scan adds one,
+ * filled with 12 a scan adds twelve — and only something that was actually typed can still
+ * be refused, which is why anything non-blank goes back through `parseCountQuantity`.
+ */
+export function resolveCountQuantity(raw: string): string | null {
+  if (!raw.trim()) return `1.${'0'.repeat(COUNT_QUANTITY_SCALE)}`
+  return parseCountQuantity(raw)
+}
+
 /** Trailing zeros are storage precision, not something to read back to somebody counting. */
 export function formatCountQuantity(raw: string): string {
   if (!/^\d+\.\d+$/.test(raw)) return raw
