@@ -1,12 +1,18 @@
 "use client"
 import * as React from 'react'
+import Link from 'next/link'
 import { CrudForm, type CrudField, type CrudFieldOption, type CrudFormGroup } from '@open-mercato/ui/backend/CrudForm'
-import { createCrud } from '@open-mercato/ui/backend/utils/crud'
+import { createCrud, deleteCrud, fetchCrudList, updateCrud } from '@open-mercato/ui/backend/utils/crud'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
+import { withFlash } from '@open-mercato/ui/backend/utils/flash'
+import { ErrorMessage, RecordNotFoundState } from '@open-mercato/ui/backend/detail'
+import { Alert } from '@open-mercato/ui/primitives/alert'
+import { Button } from '@open-mercato/ui/primitives/button'
 import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
 import { getScheduleLocale } from '@open-mercato/ui/backend/schedule/localization'
 import { GOODS_RECEIPTS_ENTITY_ID, GOODS_RECEIPTS_LIST_HREF } from './goodsReceiptsPresentation'
 import { GoodsReceiptLinesEditor } from './GoodsReceiptLinesEditor'
+import type { GoodsReceiptListItem } from '../lib/goodsReceiptListItem'
 import {
   createEmptyLineDraft,
   toLinePayloads,
@@ -26,6 +32,7 @@ export type GoodsReceiptFormValues = {
   supplierName: string
   warehouseId: string
   lines: GoodsReceiptLineDraft[]
+  /** Carries the version into `CrudForm`, which derives the lock header for update AND delete. */
   updatedAt?: string | null
 }
 
@@ -140,7 +147,7 @@ export function useGoodsReceiptGroups(t: Translate): CrudFormGroup[] {
   ], [t])
 }
 
-export function toGoodsReceiptCreatePayload(values: GoodsReceiptFormValues) {
+export function toGoodsReceiptWritePayload(values: GoodsReceiptFormValues) {
   return {
     documentNumber: values.documentNumber ?? '',
     documentDate: values.documentDate ?? '',
@@ -149,6 +156,25 @@ export function toGoodsReceiptCreatePayload(values: GoodsReceiptFormValues) {
     lines: toLinePayloads(values.lines ?? []),
   }
 }
+
+/** Maps a loaded goods receipt into the form's state, keeping each line's stored id as its key. */
+export function toGoodsReceiptFormValues(item: GoodsReceiptListItem): GoodsReceiptFormValues {
+  return {
+    id: item.id,
+    documentNumber: item.documentNumber,
+    documentDate: item.documentDate ?? '',
+    supplierName: item.supplierName,
+    warehouseId: item.warehouseId,
+    lines: (item.lines ?? []).map((line) => ({
+      key: line.id,
+      catalogProductId: line.catalogProductId,
+      quantity: line.quantity,
+      unit: line.unit ?? '',
+    })),
+    updatedAt: item.updatedAt ?? null,
+  }
+}
+
 
 export function GoodsReceiptCreateForm() {
   const t = useT()
@@ -181,10 +207,116 @@ export function GoodsReceiptCreateForm() {
       cancelHref={GOODS_RECEIPTS_LIST_HREF}
       successRedirect={successRedirect}
       onSubmit={async (values) => {
-        await createCrud('pz/goods-receipts', toGoodsReceiptCreatePayload(values))
+        await createCrud('pz/goods-receipts', toGoodsReceiptWritePayload(values))
       }}
     />
   )
 }
+
+export function GoodsReceiptEditForm({ id }: { id: string }) {
+  const t = useT()
+  const fields = useGoodsReceiptFields(t)
+  const groups = useGoodsReceiptGroups(t)
+  const [initial, setInitial] = React.useState<GoodsReceiptFormValues | null>(null)
+  const [status, setStatus] = React.useState<GoodsReceiptListItem['status'] | null>(null)
+  const [loading, setLoading] = React.useState(true)
+  const [loadError, setLoadError] = React.useState<string | null>(null)
+  const [isMissing, setIsMissing] = React.useState(false)
+
+  React.useEffect(() => {
+    let cancelled = false
+    async function load() {
+      setLoading(true)
+      setLoadError(null)
+      setIsMissing(false)
+      try {
+        const data = await fetchCrudList<GoodsReceiptListItem>('pz/goods-receipts', { ids: String(id), pageSize: 1 })
+        const item = data?.items?.[0]
+        if (cancelled) return
+        if (!item) {
+          setIsMissing(true)
+          return
+        }
+        setStatus(item.status)
+        setInitial(toGoodsReceiptFormValues(item))
+      } catch (error: unknown) {
+        if (cancelled) return
+        if ((error as { status?: number }).status === 404) setIsMissing(true)
+        else setLoadError(error instanceof Error && error.message ? error.message : t('pz.goodsReceipts.form.error.load'))
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [id, t])
+
+  const successRedirect = React.useMemo(
+    () => withFlash(GOODS_RECEIPTS_LIST_HREF, t('pz.goodsReceipts.form.flash.saved'), 'success'),
+    [t],
+  )
+  const deleteRedirect = React.useMemo(
+    () => withFlash(GOODS_RECEIPTS_LIST_HREF, t('pz.goodsReceipts.form.flash.deleted'), 'success'),
+    [t],
+  )
+  const fallbackValues = React.useMemo<GoodsReceiptFormValues>(() => ({
+    id,
+    documentNumber: '',
+    documentDate: '',
+    supplierName: '',
+    warehouseId: '',
+    lines: [],
+    updatedAt: null,
+  }), [id])
+
+  if (isMissing) {
+    return (
+      <RecordNotFoundState
+        label={t('pz.goodsReceipts.form.error.notFound')}
+        backHref={GOODS_RECEIPTS_LIST_HREF}
+        backLabel={t('pz.goodsReceipts.form.actions.backToList')}
+      />
+    )
+  }
+  if (loadError) return <ErrorMessage label={loadError} />
+
+  // Editing is restricted to drafts by construction rather than by hiding a button: the
+  // update and delete endpoints refuse a confirmed document too (ADR-0006).
+  if (status && status !== 'draft') {
+    return (
+      <div className="space-y-4">
+        <Alert status="warning">{t('pz.goodsReceipts.form.error.confirmedImmutable')}</Alert>
+        <Button asChild variant="outline">
+          <Link href={GOODS_RECEIPTS_LIST_HREF}>{t('pz.goodsReceipts.form.actions.backToList')}</Link>
+        </Button>
+      </div>
+    )
+  }
+
+  return (
+    <CrudForm<GoodsReceiptFormValues>
+      title={t('pz.goodsReceipts.form.edit.title')}
+      titleHeadingLevel={1}
+      backHref={GOODS_RECEIPTS_LIST_HREF}
+      entityId={GOODS_RECEIPTS_ENTITY_ID}
+      fields={fields}
+      groups={groups}
+      initialValues={initial ?? fallbackValues}
+      isLoading={loading}
+      loadingMessage={t('pz.goodsReceipts.form.loading')}
+      submitLabel={t('pz.goodsReceipts.form.edit.submit')}
+      cancelHref={GOODS_RECEIPTS_LIST_HREF}
+      successRedirect={successRedirect}
+      deleteRedirect={deleteRedirect}
+      onSubmit={async (next) => {
+        await updateCrud('pz/goods-receipts', { id, ...toGoodsReceiptWritePayload(next) })
+      }}
+      onDelete={async () => {
+        await deleteCrud('pz/goods-receipts', String(id))
+      }}
+    />
+  )
+}
+
 
 export default GoodsReceiptCreateForm

@@ -42,8 +42,31 @@ async function login(request: APIRequestContext, email: string, password: string
 }
 
 test.describe('TC-PZ-001 goods receipts index', () => {
+  /**
+   * One login per account for the whole file. Every test adopts the same session cookies
+   * instead of logging in again: a login per test is wasteful and enough to trip the auth
+   * rate limit on a long-lived dev server.
+   */
+  let adminCookies: Awaited<ReturnType<APIRequestContext['storageState']>>['cookies']
+  let employeeCookies: Awaited<ReturnType<APIRequestContext['storageState']>>['cookies']
+
+  test.beforeAll(async ({ playwright }) => {
+    const baseURL = process.env.BASE_URL || 'http://localhost:3000'
+    const admin = await playwright.request.newContext({ baseURL })
+    const employee = await playwright.request.newContext({ baseURL })
+    try {
+      await login(admin, ADMIN.email, ADMIN.password)
+      await login(employee, EMPLOYEE.email, EMPLOYEE.password)
+      adminCookies = (await admin.storageState()).cookies
+      employeeCookies = (await employee.storageState()).cookies
+    } finally {
+      await admin.dispose()
+      await employee.dispose()
+    }
+  })
+
   test('a user with the view feature reaches the index and its columns', async ({ context, page }) => {
-    await login(context.request, ADMIN.email, ADMIN.password)
+    await context.addCookies(adminCookies)
     await page.goto(INDEX_PATH)
     await expect(page.getByRole('heading', { name: PAGE_TITLE })).toBeVisible()
     for (const column of COLUMN_HEADERS) {
@@ -57,7 +80,7 @@ test.describe('TC-PZ-001 goods receipts index', () => {
    * a property of the environment, not of the feature.
    */
   test('an index with nothing in it explains that no deliveries have been recorded', async ({ context, page }) => {
-    await login(context.request, ADMIN.email, ADMIN.password)
+    await context.addCookies(adminCookies)
     await page.route('**/api/pz/goods-receipts**', (route) =>
       route.fulfill({
         status: 200,
@@ -70,7 +93,7 @@ test.describe('TC-PZ-001 goods receipts index', () => {
   })
 
   test('the list endpoint answers the caller scope and requires the view feature', async ({ context }) => {
-    await login(context.request, ADMIN.email, ADMIN.password)
+    await context.addCookies(adminCookies)
     const allowed = await context.request.get('/api/pz/goods-receipts?pageSize=1')
     expect(allowed.status(), `list -> ${allowed.status()}: ${await allowed.text()}`).toBe(200)
     const body = (await allowed.json()) as { items?: unknown[]; total?: number }
@@ -78,7 +101,7 @@ test.describe('TC-PZ-001 goods receipts index', () => {
   })
 
   test('a failed load says so instead of claiming there is nothing to show', async ({ context, page }) => {
-    await login(context.request, ADMIN.email, ADMIN.password)
+    await context.addCookies(adminCookies)
     await page.route('**/api/pz/goods-receipts**', (route) =>
       route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"boom"}' }),
     )
@@ -89,7 +112,7 @@ test.describe('TC-PZ-001 goods receipts index', () => {
   })
 
   test('a user without the view feature is refused the page, the endpoint and the sidebar item', async ({ context, page }) => {
-    await login(context.request, EMPLOYEE.email, EMPLOYEE.password)
+    await context.addCookies(employeeCookies)
 
     // Pinned to 403 rather than "any 4xx": a crashing endpoint would satisfy a loose
     // assertion and report the authorization gate as working.

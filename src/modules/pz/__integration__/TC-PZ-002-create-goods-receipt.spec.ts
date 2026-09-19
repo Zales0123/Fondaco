@@ -203,6 +203,8 @@ async function listById(request: APIRequestContext, id: string): Promise<GoodsRe
 
 
 test.describe('TC-PZ-002 create a goods receipt', () => {
+  let admin: APIRequestContext
+  let adminCookies: Awaited<ReturnType<APIRequestContext['storageState']>>['cookies']
   let warehouseId: string
   let productAId: string
   let productBId: string
@@ -210,10 +212,16 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
   let variantBId: string
   let productWithoutDefaultId: string
 
+  /**
+   * One login for the whole file. Every browser test adopts the same session cookies
+   * instead of logging in again: a login per test is wasteful and enough to trip the auth
+   * rate limit on a long-lived dev server.
+   */
   test.beforeAll(async ({ playwright }) => {
-    const admin = await playwright.request.newContext({ baseURL: process.env.BASE_URL || 'http://localhost:3000' })
+    admin = await playwright.request.newContext({ baseURL: process.env.BASE_URL || 'http://localhost:3000' })
+    await login(admin, ADMIN.email, ADMIN.password)
+    adminCookies = (await admin.storageState()).cookies
     try {
-      await login(admin, ADMIN.email, ADMIN.password)
       warehouseId = await createWarehouse(admin)
       const productA = await createProduct(admin, 'a')
       const productB = await createProduct(admin, 'b')
@@ -223,16 +231,20 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
       variantBId = productB.variantId
       productWithoutDefaultId = await createBareProduct(admin, 'nodefault')
       await createVariant(admin, productWithoutDefaultId, `PZQA-nodefault-${RUN}-ALT`, false)
-    } finally {
+    } catch (error) {
       await admin.dispose()
+      throw error
     }
   })
 
-  test('saves a multi-line goods receipt as a draft and lists it', async ({ context }) => {
-    await login(context.request, ADMIN.email, ADMIN.password)
+  test.afterAll(async () => {
+    await admin?.dispose()
+  })
+
+  test('saves a multi-line goods receipt as a draft and lists it', async () => {
     const documentNumber = `PZ/${RUN}/1`
 
-    const created = await context.request.post(API, {
+    const created = await admin.post(API, {
       data: {
         documentNumber,
         documentDate: yesterday(),
@@ -251,7 +263,7 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
     const createdBody = (await created.json()) as Created
     expect(createdBody.id).toBeTruthy()
 
-    const row = await readGoodsReceipt(context.request, createdBody.id as string)
+    const row = await readGoodsReceipt(admin, createdBody.id as string)
     expect(row.documentNumber).toBe(documentNumber)
     expect(row.status).toBe('draft')
     expect(row.supplierName).toBe('Hurtownia Kowalski')
@@ -283,8 +295,7 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
     ])
   })
 
-  test('refuses a document number already used in the organization, ignoring case', async ({ context }) => {
-    await login(context.request, ADMIN.email, ADMIN.password)
+  test('refuses a document number already used in the organization, ignoring case', async () => {
     const documentNumber = `PZ/${RUN}/2`
     const payload = {
       documentDate: yesterday(),
@@ -296,8 +307,8 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
     // Fired together so the read-before-write cannot be what refuses the second one: the
     // partial unique index is the guard, and a sequential test would pass without it.
     const [first, second] = await Promise.all([
-      context.request.post(API, { data: { ...payload, documentNumber }, failOnStatusCode: false }),
-      context.request.post(API, {
+      admin.post(API, { data: { ...payload, documentNumber }, failOnStatusCode: false }),
+      admin.post(API, {
         // Lower-cased and padded: the same document, so the same refusal.
         data: { ...payload, documentNumber: `  ${documentNumber.toLowerCase()}  ` },
         failOnStatusCode: false,
@@ -311,16 +322,15 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
     expect(body.fields?.documentNumber, 'the conflict must be reported on the Document Number field').toBeTruthy()
 
     // And a plain sequential duplicate is refused the same way.
-    const sequential = await context.request.post(API, {
+    const sequential = await admin.post(API, {
       data: { ...payload, documentNumber: documentNumber.toUpperCase() },
       failOnStatusCode: false,
     })
     expect(sequential.status(), await sequential.text()).toBe(400)
   })
 
-  test('refuses a product that cannot be resolved to a single default variant', async ({ context }) => {
-    await login(context.request, ADMIN.email, ADMIN.password)
-    const response = await context.request.post(API, {
+  test('refuses a product that cannot be resolved to a single default variant', async () => {
+    const response = await admin.post(API, {
       data: {
         documentNumber: `PZ/${RUN}/8`,
         documentDate: yesterday(),
@@ -335,8 +345,7 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
     expect(((await response.json()) as { fields?: Record<string, string> }).fields?.lines).toBeTruthy()
   })
 
-  test('refuses a future document date, a non-positive quantity and a receipt with no lines', async ({ context }) => {
-    await login(context.request, ADMIN.email, ADMIN.password)
+  test('refuses a future document date, a non-positive quantity and a receipt with no lines', async () => {
     const base = {
       documentDate: yesterday(),
       supplierName: 'Hurtownia Kowalski',
@@ -344,14 +353,14 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
       lines: [{ catalogProductId: productAId, quantity: '1' }],
     }
 
-    const future = await context.request.post(API, {
+    const future = await admin.post(API, {
       data: { ...base, documentNumber: `PZ/${RUN}/3`, documentDate: nextYear() },
       failOnStatusCode: false,
     })
     expect(future.status(), await future.text()).toBe(400)
     expect(((await future.json()) as { fields?: Record<string, string> }).fields?.documentDate).toBeTruthy()
 
-    const zeroQuantity = await context.request.post(API, {
+    const zeroQuantity = await admin.post(API, {
       data: { ...base, documentNumber: `PZ/${RUN}/4`, lines: [{ catalogProductId: productAId, quantity: '0' }] },
       failOnStatusCode: false,
     })
@@ -359,7 +368,7 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
     expect(((await zeroQuantity.json()) as { fields?: Record<string, string> }).fields?.lines).toBeTruthy()
 
     const noLinesNumber = `PZ/${RUN}/5`
-    const noLines = await context.request.post(API, {
+    const noLines = await admin.post(API, {
       data: { ...base, documentNumber: noLinesNumber, lines: [] },
       failOnStatusCode: false,
     })
@@ -368,8 +377,8 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
 
     // A failed save must leave nothing behind, so the refused number is still free — proven
     // both by its absence from the whole index and by a later create taking it.
-    expect(await documentNumberExists(context.request, noLinesNumber)).toBe(false)
-    const reused = await context.request.post(API, {
+    expect(await documentNumberExists(admin, noLinesNumber)).toBe(false)
+    const reused = await admin.post(API, {
       data: { ...base, documentNumber: noLinesNumber },
       failOnStatusCode: false,
     })
@@ -383,11 +392,10 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
    * ids the document already had. A redo that minted new ids would leave the original
    * lines pointing at a row nobody can reach.
    */
-  test('undo removes the whole document and redo restores it under its original ids', async ({ context }) => {
-    await login(context.request, ADMIN.email, ADMIN.password)
+  test('undo removes the whole document and redo restores it under its original ids', async () => {
     const documentNumber = `PZ/${RUN}/9`
 
-    const created = await context.request.post(API, {
+    const created = await admin.post(API, {
       data: {
         documentNumber,
         documentDate: yesterday(),
@@ -403,23 +411,23 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
     expect(created.status(), await created.text()).toBe(201)
     const operation = readOperation(created)
     const receiptId = ((await created.json()) as Created).id as string
-    const before = await readGoodsReceipt(context.request, receiptId)
+    const before = await readGoodsReceipt(admin, receiptId)
     expect(before.lines).toHaveLength(2)
 
-    const undone = await context.request.post('/api/audit_logs/audit-logs/actions/undo', {
+    const undone = await admin.post('/api/audit_logs/audit-logs/actions/undo', {
       data: { undoToken: operation.undoToken },
       failOnStatusCode: false,
     })
     expect(undone.status(), await undone.text()).toBe(200)
-    expect(await listById(context.request, receiptId)).toHaveLength(0)
+    expect(await listById(admin, receiptId)).toHaveLength(0)
 
-    const redone = await context.request.post('/api/audit_logs/audit-logs/actions/redo', {
+    const redone = await admin.post('/api/audit_logs/audit-logs/actions/redo', {
       data: { logId: operation.id },
       failOnStatusCode: false,
     })
     expect(redone.status(), await redone.text()).toBe(200)
 
-    const after = await readGoodsReceipt(context.request, receiptId)
+    const after = await readGoodsReceipt(admin, receiptId)
     expect(after.id).toBe(before.id)
     expect(after.documentNumber).toBe(documentNumber)
     expect(after.status).toBe('draft')
@@ -437,7 +445,7 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
    */
   test('completes a multi-line create from the keyboard alone', async ({ context, page }) => {
     test.setTimeout(180_000)
-    await login(context.request, ADMIN.email, ADMIN.password)
+    await context.addCookies(adminCookies)
     const documentNumber = `PZ/${RUN}/7`
 
     await page.goto(`${INDEX_PATH}/create`)
@@ -522,7 +530,7 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
   test('a refused save keeps the typed values and creates no header', async ({ context, page }) => {
     // Two searchable pickers plus a full page load; the default 20s is too tight for that.
     test.setTimeout(90_000)
-    await login(context.request, ADMIN.email, ADMIN.password)
+    await context.addCookies(adminCookies)
     const documentNumber = `PZ/${RUN}/6`
 
     await page.goto(`${INDEX_PATH}/create`)

@@ -40,6 +40,8 @@ const F = {
 const routeMetadata = {
   GET: { requireAuth: true, requireFeatures: ['pz.goodsReceipts.view'] },
   POST: { requireAuth: true, requireFeatures: ['pz.goodsReceipts.manage'] },
+  PUT: { requireAuth: true, requireFeatures: ['pz.goodsReceipts.manage'] },
+  DELETE: { requireAuth: true, requireFeatures: ['pz.goodsReceipts.manage'] },
 }
 
 /**
@@ -149,7 +151,7 @@ async function decorateLines(
   }
 }
 
-export const { metadata, GET, POST } = makeCrudRoute({
+export const { metadata, GET, POST, PUT, DELETE } = makeCrudRoute({
   metadata: routeMetadata,
   orm: {
     entity: GoodsReceipt,
@@ -213,6 +215,19 @@ export const { metadata, GET, POST } = makeCrudRoute({
       }),
       status: 201,
     },
+    update: {
+      commandId: 'pz.goodsReceipts.update',
+      schema: rawBodySchema,
+      mapInput: ({ parsed }) => parsed,
+      response: ({ result }) => ({
+        id: String((result as GoodsReceipt).id),
+        updatedAt: (result as GoodsReceipt).updatedAt?.toISOString() ?? null,
+      }),
+    },
+    delete: {
+      commandId: 'pz.goodsReceipts.delete',
+      response: () => ({ ok: true }),
+    },
   },
   hooks: {
     afterList: async (payload, ctx) => {
@@ -254,6 +269,12 @@ const goodsReceiptCreatedSchema = z.object({
   updatedAt: z.string().nullable(),
 })
 
+const goodsReceiptUpdateBodySchema = goodsReceiptWriteBodySchema.extend({ id: z.string().uuid() })
+
+const goodsReceiptDeleteBodySchema = z.object({ id: z.string().uuid() })
+
+const goodsReceiptOkSchema = z.object({ ok: z.literal(true) })
+
 export const openApi: OpenApiRouteDoc = createPzCrudOpenApi({
   resourceName: 'Goods Receipt',
   pluralName: 'Goods Receipts',
@@ -264,5 +285,17 @@ export const openApi: OpenApiRouteDoc = createPzCrudOpenApi({
     responseSchema: goodsReceiptCreatedSchema,
     description:
       'Creates a goods receipt and all of its lines in one transaction. Tenant and organization scope come from the session, never from the body.',
+  },
+  update: {
+    schema: goodsReceiptUpdateBodySchema,
+    responseSchema: goodsReceiptCreatedSchema,
+    description:
+      'Replaces a draft goods receipt and all of its lines in one transaction. Confirmed documents are refused. Send the record version in the `x-om-ext-optimistic-lock-expected-updated-at` header; a stale version is answered with 409.',
+  },
+  del: {
+    schema: goodsReceiptDeleteBodySchema,
+    responseSchema: goodsReceiptOkSchema,
+    description:
+      'Soft-deletes a draft goods receipt, freeing its Document Number for reuse. Confirmed documents are refused.',
   },
 })

@@ -1,26 +1,35 @@
 "use client"
 import * as React from 'react'
 import Link from 'next/link'
-import { useQuery } from '@tanstack/react-query'
+import { useRouter } from 'next/navigation'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { EmptyState } from '@open-mercato/ui/primitives/empty-state'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { StatusBadge, type StatusBadgeVariant } from '@open-mercato/ui/primitives/status-badge'
 import { formatDisplayDate } from '@open-mercato/ui/primitives/date-format'
-import { fetchCrudList } from '@open-mercato/ui/backend/utils/crud'
+import { deleteCrud, fetchCrudList } from '@open-mercato/ui/backend/utils/crud'
+import { withScopedApiRequestHeaders } from '@open-mercato/ui/backend/utils/apiCall'
+import { buildOptimisticLockHeader } from '@open-mercato/ui/backend/utils/optimisticLock'
+import { surfaceRecordConflict } from '@open-mercato/ui/backend/conflicts'
+import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
+import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
 import type { GoodsReceiptListItem } from '../lib/goodsReceiptListItem'
 import {
   GOODS_RECEIPTS_CREATE_HREF,
   GOODS_RECEIPTS_ENTITY_ID,
+  GOODS_RECEIPTS_LIST_HREF,
   GOODS_RECEIPTS_TABLE_ID,
   useCanManageGoodsReceipts,
   useWarehouseNames,
 } from './goodsReceiptsPresentation'
 
 const PAGE_SIZE = 50
+const QUERY_KEY = 'pz.goodsReceipts'
 
 type GoodsReceiptRow = GoodsReceiptListItem & { warehouseLabel: string }
 
@@ -91,11 +100,14 @@ function buildColumns(t: Translate, locale: string): ColumnDef<GoodsReceiptRow>[
 export default function GoodsReceiptsTable() {
   const t = useT()
   const locale = useLocale()
+  const router = useRouter()
+  const queryClient = useQueryClient()
+  const { confirm, ConfirmDialogElement } = useConfirmDialog()
   const [page, setPage] = React.useState(1)
   const scopeVersion = useOrganizationScopeVersion()
 
   const { data, isLoading, error } = useQuery<GoodsReceiptsResponse>({
-    queryKey: ['pz.goodsReceipts', page, scopeVersion],
+    queryKey: [QUERY_KEY, page, scopeVersion],
     queryFn: async () =>
       fetchCrudList<GoodsReceiptListItem>('pz/goods-receipts', {
         page: String(page),
@@ -131,31 +143,82 @@ export default function GoodsReceiptsTable() {
     </Button>
   ) : null
 
+  const handleDelete = React.useCallback(async (row: GoodsReceiptRow) => {
+    const confirmed = await confirm({
+      title: t('pz.goodsReceipts.table.confirm.delete.title'),
+      description: t('pz.goodsReceipts.table.confirm.delete.description', undefined, {
+        documentNumber: row.documentNumber,
+      }),
+      variant: 'destructive',
+    })
+    if (!confirmed) return
+    try {
+      // The row carries its own version, so a list rendered before someone else edited the
+      // document fails with a conflict instead of deleting a draft this user never saw.
+      await withScopedApiRequestHeaders(
+        buildOptimisticLockHeader(row.updatedAt),
+        () => deleteCrud('pz/goods-receipts', row.id),
+      )
+      flash(t('pz.goodsReceipts.form.flash.deleted'), 'success')
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEY] })
+    } catch (err) {
+      if (surfaceRecordConflict(err, t)) {
+        queryClient.invalidateQueries({ queryKey: [QUERY_KEY] })
+        return
+      }
+      flash(err instanceof Error && err.message ? err.message : t('pz.goodsReceipts.table.error.delete'), 'error')
+    }
+  }, [confirm, queryClient, t])
+
+
   return (
-    <DataTable<GoodsReceiptRow>
-      title={t('pz.goodsReceipts.page.title')}
-      titleHeadingLevel={1}
-      actions={createAction}
-      columns={columns}
-      data={rows}
-      entityId={GOODS_RECEIPTS_ENTITY_ID}
-      extensionTableId={GOODS_RECEIPTS_TABLE_ID}
-      isLoading={isLoading}
-      error={error ? t('pz.goodsReceipts.table.error.load') : null}
-      emptyState={(
-        <EmptyState
-          title={t('pz.goodsReceipts.table.empty.title')}
-          description={t('pz.goodsReceipts.table.empty.description')}
-          actions={createAction}
-        />
-      )}
-      pagination={{
-        page,
-        pageSize: PAGE_SIZE,
-        total: data?.total ?? 0,
-        totalPages: data?.totalPages ?? 0,
-        onPageChange: setPage,
-      }}
-    />
+    <>
+      <DataTable<GoodsReceiptRow>
+        title={t('pz.goodsReceipts.page.title')}
+        titleHeadingLevel={1}
+        actions={createAction}
+        columns={columns}
+        data={rows}
+        entityId={GOODS_RECEIPTS_ENTITY_ID}
+        extensionTableId={GOODS_RECEIPTS_TABLE_ID}
+        isLoading={isLoading}
+        error={error ? t('pz.goodsReceipts.table.error.load') : null}
+        emptyState={(
+          <EmptyState
+            title={t('pz.goodsReceipts.table.empty.title')}
+            description={t('pz.goodsReceipts.table.empty.description')}
+            actions={createAction}
+          />
+        )}
+        rowActions={(row) => (
+          <RowActions
+            items={[
+              {
+                id: 'pz.goodsReceipts.edit',
+                label: t('pz.goodsReceipts.table.actions.edit'),
+                href: `${GOODS_RECEIPTS_LIST_HREF}/${row.id}/edit`,
+              },
+              ...(canManage && row.status === 'draft'
+                ? [{
+                    id: 'pz.goodsReceipts.delete',
+                    label: t('pz.goodsReceipts.table.actions.delete'),
+                    destructive: true,
+                    onSelect: () => { void handleDelete(row) },
+                  }]
+                : []),
+            ]}
+          />
+        )}
+        onRowClick={(row) => router.push(`${GOODS_RECEIPTS_LIST_HREF}/${row.id}/edit`)}
+        pagination={{
+          page,
+          pageSize: PAGE_SIZE,
+          total: data?.total ?? 0,
+          totalPages: data?.totalPages ?? 0,
+          onPageChange: setPage,
+        }}
+      />
+      {ConfirmDialogElement}
+    </>
   )
 }
