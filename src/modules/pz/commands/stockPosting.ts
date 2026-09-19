@@ -17,9 +17,10 @@ import { loadWarehouseDestinations } from '../lib/destinations'
 import { loadCountedLines } from '../lib/receivingConfirmation'
 import { aggregatePostableQuantities, type PostableQuantity } from '../lib/stockPosting'
 import type { TranslateFn } from '../lib/goodsReceiptInput'
-import { quantityToNumber } from '../lib/quantity'
+import { fromScaledQuantity, quantityToNumber, toScaledQuantity } from '../lib/quantity'
 import {
   GOODS_RECEIPT_ENTITY_ID,
+  emitGoodsReceiptLifecycleEvent,
   goodsReceiptCrudEvents,
   goodsReceiptCrudIndexer,
   type GoodsReceiptScope,
@@ -39,8 +40,16 @@ export type StockPostingResult = {
   status: 'posted' | 'failed'
   /** Movements this run asked `wms` for; a replayed one is counted here as well. */
   posted: number
+  /**
+   * What those movements carried, summed as a decimal string at storage precision. It is a
+   * headline figure for the office, not an accounting total: units are not summable across
+   * variants, and the per-variant quantities are the ones `wms` actually holds.
+   */
+  postedQuantity: string
   reason: StockPostingFailureReason | null
 }
+
+const ZERO_QUANTITY = fromScaledQuantity(0n)
 
 /**
  * Posts one confirmed delivery's counted goods into `wms` stock.
@@ -70,7 +79,13 @@ const postStockCommand: CommandHandler<Record<string, unknown>, StockPostingResu
     const em = (ctx.container.resolve('em') as EntityManager).fork()
 
     let receipt!: GoodsReceipt
-    let outcome: StockPostingResult = { id: input.id, status: 'posted', posted: 0, reason: null }
+    let outcome: StockPostingResult = {
+      id: input.id,
+      status: 'posted',
+      posted: 0,
+      postedQuantity: ZERO_QUANTITY,
+      reason: null,
+    }
 
     await runCrudCommandWrite<GoodsReceipt>({
       ctx,
@@ -127,6 +142,8 @@ const postStockCommand: CommandHandler<Record<string, unknown>, StockPostingResu
         identifiers: { id: input.id, tenantId: scope.tenantId, organizationId: scope.organizationId },
       }),
     })
+
+    await emitSettled(ctx, receipt, scope, outcome)
 
     return outcome
   },
@@ -262,18 +279,21 @@ async function postCountedGoods(
   const performedBy = receipt.confirmedBy ?? (typeof ctx.auth?.sub === 'string' ? ctx.auth.sub : null)
   const postable = aggregatePostableQuantities(await loadCountedLines(em, scope, id))
 
-  if (postable.length === 0) return { id, status: 'posted', posted: 0, reason: null }
+  if (postable.length === 0) {
+    return { id, status: 'posted', posted: 0, postedQuantity: ZERO_QUANTITY, reason: null }
+  }
   if (!destinationLocationId || !performedBy) {
     logger.error('Goods receipt stock posting is missing what the movement needs', {
       goodsReceiptId: id,
       hasDestination: Boolean(destinationLocationId),
       hasPerformer: Boolean(performedBy),
     })
-    return { id, status: 'failed', posted: 0, reason: 'destination_unusable' }
+    return { id, status: 'failed', posted: 0, postedQuantity: ZERO_QUANTITY, reason: 'destination_unusable' }
   }
 
   const commandBus = ctx.container.resolve<CommandBus>('commandBus')
   let posted = 0
+  let postedScaled = 0n
   for (const entry of postable) {
     try {
       await commandBus.execute('wms.inventory.receive', {
@@ -281,6 +301,7 @@ async function postCountedGoods(
         ctx: buildWmsContext(ctx, scope),
       })
       posted += 1
+      postedScaled += toScaledQuantity(entry.quantity)
     } catch (error) {
       const reason = terminalFailureReason(error)
       if (!reason) throw error
@@ -290,10 +311,40 @@ async function postCountedGoods(
         catalogVariantId: entry.catalogVariantId,
         reason,
       })
-      return { id, status: 'failed', posted, reason }
+      return { id, status: 'failed', posted, postedQuantity: fromScaledQuantity(postedScaled), reason }
     }
   }
-  return { id, status: 'posted', posted, reason: null }
+  return { id, status: 'posted', posted, postedQuantity: fromScaledQuantity(postedScaled), reason: null }
+}
+
+/**
+ * Announces the settle, once.
+ *
+ * Both callers reach it — the confirmation's posting and the office's retry — and neither
+ * announces twice, because a settled posting is refused before it gets this far. A transient
+ * `wms` failure never reaches it either: that path rethrows before the status is written, so
+ * the posting stays pending and the durable queue tries again rather than the office being
+ * told about every attempt (ADR-0011).
+ */
+async function emitSettled(
+  ctx: CommandRuntimeContext,
+  receipt: GoodsReceipt,
+  scope: GoodsReceiptScope,
+  outcome: StockPostingResult,
+): Promise<void> {
+  const base = {
+    id: outcome.id,
+    documentNumber: receipt.documentNumber,
+    tenantId: scope.tenantId,
+    organizationId: scope.organizationId,
+  }
+  if (outcome.status === 'posted') {
+    const payload = { ...base, postedQuantity: outcome.postedQuantity, postedVariants: outcome.posted }
+    await emitGoodsReceiptLifecycleEvent(ctx, 'pz.goods_receipt.stock_posted', payload)
+    return
+  }
+  const payload = { ...base, reason: outcome.reason }
+  await emitGoodsReceiptLifecycleEvent(ctx, 'pz.goods_receipt.stock_posting_failed', payload)
 }
 
 function buildReceiveInput(
