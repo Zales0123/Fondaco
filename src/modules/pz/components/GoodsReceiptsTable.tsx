@@ -97,6 +97,7 @@ type GoodsReceiptsResponse = {
 
 const STATUS_VARIANTS: Record<GoodsReceiptListItem['status'], StatusBadgeVariant> = {
   draft: 'neutral',
+  receiving: 'info',
   confirmed: 'success',
 }
 

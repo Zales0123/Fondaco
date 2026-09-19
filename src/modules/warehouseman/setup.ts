@@ -39,7 +39,10 @@ export const setup: ModuleSetupConfig = {
     // than by accident of another module's wildcard.
     superadmin: ['warehouseman.panel.access', 'entities.definitions.view'],
     admin: ['warehouseman.panel.access', 'entities.definitions.view'],
-    [WAREHOUSEMAN_ROLE]: ['warehouseman.panel.access'],
+    // Receiving lives in `pz`, so the floor's grants are `pz.*` features: read the released
+    // documents and count onto their pallets. Deliberately not `pz.goodsReceipts.manage` —
+    // the floor counts a delivery, it does not edit the paperwork it is counted against.
+    [WAREHOUSEMAN_ROLE]: ['warehouseman.panel.access', 'pz.goodsReceipts.view', 'pz.receiving.count'],
   },
 
   async onTenantCreated({ em, tenantId }) {

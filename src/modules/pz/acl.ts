@@ -25,6 +25,17 @@ export const features = [
     dependsOn: ['pz.goodsReceipts.view', 'catalog.products.view'],
   },
   {
+    /**
+     * Counting is the floor's job, not the office's: a warehouseman records what physically
+     * arrived without being able to edit the document it is counted against. Owned by `pz` so
+     * that `pz` never gates on a `warehouseman` feature id.
+     */
+    id: 'pz.receiving.count',
+    title: 'Count deliveries onto pallets',
+    module: 'pz',
+    dependsOn: ['pz.goodsReceipts.view'],
+  },
+  {
     id: 'pz.goodsReceipts.confirm',
     title: 'Confirm goods receipts',
     module: 'pz',
