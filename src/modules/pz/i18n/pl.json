@@ -25,6 +25,7 @@
   "pz.goodsReceipts.errors.supplierRequired": "Dostawca jest wymagany.",
   "pz.goodsReceipts.errors.supplierTooLong": "Nazwa dostawcy jest za długa.",
   "pz.goodsReceipts.errors.tenantRequired": "Wymagany jest kontekst najemcy.",
+  "pz.goodsReceipts.errors.undoDeleted": "To przyjęcie zewnętrzne zostało w międzyczasie usunięte, więc tej edycji nie można już cofnąć.",
   "pz.goodsReceipts.errors.undoDocumentNumberTaken": "Ten numer dokumentu został w międzyczasie użyty przez inne przyjęcie, więc nie można go przywrócić.",
   "pz.goodsReceipts.errors.undoScope": "Cofnięcie nie jest dozwolone z tego najemcy i organizacji.",
   "pz.goodsReceipts.errors.undoStale": "To przyjęcie zewnętrzne zmieniło się od tamtej operacji, więc nie można jej już cofnąć.",

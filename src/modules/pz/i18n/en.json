@@ -25,6 +25,7 @@
   "pz.goodsReceipts.errors.supplierRequired": "Supplier is required.",
   "pz.goodsReceipts.errors.supplierTooLong": "Supplier is too long.",
   "pz.goodsReceipts.errors.tenantRequired": "Tenant context is required.",
+  "pz.goodsReceipts.errors.undoDeleted": "This goods receipt has since been deleted, so that edit can no longer be undone.",
   "pz.goodsReceipts.errors.undoDocumentNumberTaken": "This Document Number has been used by another goods receipt since, so this one cannot be restored.",
   "pz.goodsReceipts.errors.undoScope": "Undo is not allowed from this tenant and organization.",
   "pz.goodsReceipts.errors.undoStale": "This goods receipt has changed since that action, so it can no longer be undone.",

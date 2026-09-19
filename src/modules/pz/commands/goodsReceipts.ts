@@ -342,10 +342,20 @@ export function serializeGoodsReceipt(
  * entity whose `lines` collection was never initialised — reading it there would throw
  * after the restore had already committed and emitted its effects.
  */
+/**
+ * Snapshots captured by the write itself, while it still held the row lock. Re-reading the
+ * lines after the commit would let another writer's change into a snapshot this command
+ * never persisted, so the reload below is only the fallback for entities that did not come
+ * from one of this module's writes (a redo restores through a shared helper).
+ */
+const capturedAggregates = new WeakMap<GoodsReceipt, SerializedGoodsReceipt>()
+
 async function snapshotAggregate(
   ctx: CommandRuntimeContext,
   receipt: GoodsReceipt,
 ): Promise<SerializedGoodsReceipt> {
+  const captured = capturedAggregates.get(receipt)
+  if (captured) return captured
   const em = (ctx.container.resolve('em') as EntityManager).fork()
   return serializeGoodsReceipt(receipt, await findScopedLines(em, receipt.id, receipt))
 }
@@ -630,6 +640,7 @@ const createGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
       throw error
     }
 
+    capturedAggregates.set(receipt, serializeGoodsReceipt(receipt, lines))
     return receipt
   },
   captureAfter: (_input, result, ctx) => snapshotAggregate(ctx, result),
@@ -769,11 +780,15 @@ async function readAggregateForSnapshot(
  */
 function requireExpectedVersion(ctx: CommandRuntimeContext, translate: TranslateFn): string {
   const expected = readOptimisticLockExpected(ctx.request ?? null)
-  if (!expected) {
+  // An unparseable token is worse than a missing one: `assertOptimisticLock` cannot compare
+  // it and returns silently, so `garbage` would sail through the guard it looks like it
+  // satisfied. Both are refused here.
+  const parsed = expected ? new Date(expected) : null
+  if (!expected || !parsed || Number.isNaN(parsed.getTime())) {
     throw badRequest(
       translate(
         'pz.goodsReceipts.errors.versionRequired',
-        'Send the record version you are working from in the optimistic-lock header.',
+        'Send the record version you are working from, as an ISO timestamp, in the optimistic-lock header.',
       ),
     )
   }
@@ -791,15 +806,34 @@ function requireRecordId(raw: unknown, translate: TranslateFn): string {
   return id
 }
 
+/**
+ * Stable text for a snapshot, with object keys sorted.
+ *
+ * The jsonb columns come back with their keys in Postgres' own order — `{ sku, name }`
+ * where the code wrote `{ name, sku }` — so a plain `JSON.stringify` comparison would call
+ * an untouched document changed.
+ */
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize)
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, canonicalize(entry)]),
+    )
+  }
+  return value
+}
+
 /** Compares an aggregate against a snapshot, ignoring the version stamp that always moves. */
 function aggregateMatchesSnapshot(
   receipt: GoodsReceipt,
   lines: readonly GoodsReceiptLine[],
   snapshot: SerializedGoodsReceipt,
 ): boolean {
-  const current = serializeGoodsReceipt(receipt, lines)
   const strip = ({ updatedAt: _updatedAt, ...rest }: SerializedGoodsReceipt) => rest
-  return JSON.stringify(strip(current)) === JSON.stringify(strip(snapshot))
+  const current = JSON.stringify(canonicalize(strip(serializeGoodsReceipt(receipt, lines))))
+  return current === JSON.stringify(canonicalize(strip(snapshot)))
 }
 
 /**
@@ -906,6 +940,7 @@ const updateGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
       throw error
     }
 
+    capturedAggregates.set(receipt, serializeGoodsReceipt(receipt, replacements))
     return receipt
   },
   captureAfter: (_input, result, ctx) => snapshotAggregate(ctx, result),
@@ -955,6 +990,17 @@ const updateGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
             { lockMode: LockMode.PESSIMISTIC_WRITE },
           )
           if (!receipt) return
+          if (receipt.deletedAt != null) {
+            // The document was deleted after this edit. Undoing the edit would mutate a
+            // deleted record and burn the undo, and undoing the delete afterwards would
+            // then restore the post-edit state nobody asked for.
+            throw conflict(
+              translate(
+                'pz.goodsReceipts.errors.undoDeleted',
+                'This goods receipt has since been deleted, so that edit can no longer be undone.',
+              ),
+            )
+          }
           const lines = await findScopedLines(em, before.id, scope)
           // A retry after a partial failure finds the snapshot already back in place;
           // repeating the write — and its effects — would be the bug, not the fix.

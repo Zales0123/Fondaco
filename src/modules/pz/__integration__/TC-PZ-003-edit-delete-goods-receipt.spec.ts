@@ -320,6 +320,16 @@ test.describe('TC-PZ-003 edit and delete draft goods receipts', () => {
     const remove = await admin.delete(`${API}?id=${encodeURIComponent(draft.id)}`, { failOnStatusCode: false })
     expect(remove.status(), await remove.text()).toBe(400)
 
+
+    const garbage = await admin.put(API, {
+      headers: { [LOCK_HEADER]: 'not-a-timestamp' },
+      data: body,
+      failOnStatusCode: false,
+    })
+    // An unparseable token is worse than a missing one: the installed helper cannot compare
+    // it and would return silently, so it must be refused rather than treated as satisfied.
+    expect(garbage.status(), await garbage.text()).toBe(400)
+
     expect((await readGoodsReceipt(admin, draft.id)).supplierName).toBe('Hurtownia Kowalski')
   })
 
@@ -360,12 +370,13 @@ test.describe('TC-PZ-003 edit and delete draft goods receipts', () => {
     expect(restored.lineCount).toBe(1)
     expect(restored.lines?.map((line) => line.catalogProductId)).toEqual([productAId])
 
-    // A retry finds the snapshot already back in place and changes nothing further.
+    // Replaying the same undo token is refused before it reaches the handler, which is
+    // the bus contract; what matters here is that the document is not touched again.
     const retried = await admin.post('/api/audit_logs/audit-logs/actions/undo', {
       data: { undoToken: operation.undoToken },
       failOnStatusCode: false,
     })
-    expect([200, 400, 404, 409]).toContain(retried.status())
+    expect(retried.status(), await retried.text()).toBeGreaterThanOrEqual(400)
     const afterRetry = await readGoodsReceipt(admin, draft.id)
     expect(afterRetry.supplierName).toBe('Hurtownia Kowalski')
     expect(afterRetry.lineCount).toBe(1)
@@ -403,9 +414,49 @@ test.describe('TC-PZ-003 edit and delete draft goods receipts', () => {
       data: { undoToken: operation.undoToken },
       failOnStatusCode: false,
     })
+    // Refused — by the command bus, which will not redeem a token the record has moved
+    // past, with the command's own staleness guard behind it as defence in depth.
     expect(undone.status(), await undone.text()).toBeGreaterThanOrEqual(400)
+    expect(undone.status()).toBeLessThan(500)
     // Undoing would have thrown away the second edit; it stands instead.
     expect((await readGoodsReceipt(admin, draft.id)).supplierName).toBe('Hurtownia Druga Edycja')
+  })
+
+  test('refuses to undo an edit once the goods receipt has been deleted', async () => {
+    const draft = await createDraft(admin)
+    const opened = await readGoodsReceipt(admin, draft.id)
+    const edited = await admin.put(API, {
+      headers: { [LOCK_HEADER]: opened.updatedAt ?? '' },
+      data: {
+        id: draft.id,
+        documentNumber: draft.documentNumber,
+        documentDate: yesterday(),
+        supplierName: 'Hurtownia Przed Usunięciem',
+        warehouseId,
+        lines: [{ catalogProductId: productAId, quantity: '2' }],
+      },
+      failOnStatusCode: false,
+    })
+    expect(edited.status(), await edited.text()).toBe(200)
+    const operation = readOperation(edited)
+
+    const current = await readGoodsReceipt(admin, draft.id)
+    const removed = await admin.delete(`${API}?id=${encodeURIComponent(draft.id)}`, {
+      headers: { [LOCK_HEADER]: current.updatedAt ?? '' },
+      failOnStatusCode: false,
+    })
+    expect(removed.status(), await removed.text()).toBe(200)
+
+    // Undoing the edit would mutate a deleted record and burn the undo, leaving the later
+    // delete-undo to restore a state nobody asked for. The bus refuses the superseded token
+    // first; the command's own check on `deletedAt` is what stops it if it ever gets through.
+    const undone = await admin.post('/api/audit_logs/audit-logs/actions/undo', {
+      data: { undoToken: operation.undoToken },
+      failOnStatusCode: false,
+    })
+    expect(undone.status(), await undone.text()).toBeGreaterThanOrEqual(400)
+    expect(undone.status()).toBeLessThan(500)
+    expect(await listById(admin, draft.id)).toHaveLength(0)
   })
 
   test('loads a draft with its lines and saves added and removed lines from the screen', async ({ context, page }) => {

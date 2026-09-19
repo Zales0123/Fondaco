@@ -1,7 +1,6 @@
 "use client"
 import * as React from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
@@ -100,7 +99,6 @@ function buildColumns(t: Translate, locale: string): ColumnDef<GoodsReceiptRow>[
 export default function GoodsReceiptsTable() {
   const t = useT()
   const locale = useLocale()
-  const router = useRouter()
   const queryClient = useQueryClient()
   const { confirm, ConfirmDialogElement } = useConfirmDialog()
   const [page, setPage] = React.useState(1)
@@ -191,6 +189,9 @@ export default function GoodsReceiptsTable() {
             actions={createAction}
           />
         )}
+        // No `onRowClick`: `DataTable` makes every row look clickable as soon as one is
+        // supplied, and a confirmed row has nowhere to go yet. The Edit row action carries
+        // the navigation for the rows that do.
         rowActions={(row) => {
           // Only offer what the row can actually do: the edit route refuses a confirmed
           // document and a caller without the manage feature, so pointing at it anyway
@@ -214,9 +215,6 @@ export default function GoodsReceiptsTable() {
               ]}
             />
           )
-        }}
-        onRowClick={(row) => {
-          if (canManage && row.status === 'draft') router.push(editHref(row))
         }}
         pagination={{
           page,
