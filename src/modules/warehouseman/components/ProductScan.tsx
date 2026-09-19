@@ -220,6 +220,27 @@ function ScannedProductCard({
               value={formatStockQuantity(stock.available)}
             />
           </div>
+          {/* Where to walk. A figure without it answers "is it here" and leaves the
+              warehouseman to find out where on their own, which is the walk they scanned
+              to avoid. The fullest location is the one worth naming: it is the shelf that
+              can fill the most of what they came for, and the count beside it is what
+              stops them reading it as all there is. The location tile stands on its own
+              row because a code does not fit a third of a handheld's width. */}
+          {stock.primaryLocation ? (
+            <div className="flex flex-col gap-1">
+              <StatTile
+                label={t('warehouseman.scan.stock.locationLabel')}
+                value={stock.primaryLocation.code ?? t('warehouseman.scan.stock.locationUnnamed')}
+              />
+              {stock.locationCount > 1 ? (
+                <p className="text-base text-muted-foreground">
+                  {t('warehouseman.scan.stock.otherLocations', undefined, {
+                    count: stock.locationCount - 1,
+                  })}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       ) : (
         <ScreenWarning>

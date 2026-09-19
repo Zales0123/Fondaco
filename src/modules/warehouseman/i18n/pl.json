@@ -151,6 +151,9 @@
   "warehouseman.scan.stock.availableLabel": "Dostępne",
   "warehouseman.scan.stock.inWarehouse": "W magazynie {warehouse}",
   "warehouseman.scan.stock.noWarehouse": "Stan magazynowy wymaga przypisanego magazynu. Poproś biuro o przypisanie.",
+  "warehouseman.scan.stock.locationLabel": "Gdzie leży",
+  "warehouseman.scan.stock.locationUnnamed": "Bez nazwy",
+  "warehouseman.scan.stock.otherLocations": "Więcej lokalizacji: {count}",
   "warehouseman.stub.back": "Wróć",
   "warehouseman.stub.notImplemented": "Ta operacja nie jest jeszcze dostępna."
 }
