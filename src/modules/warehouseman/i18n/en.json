@@ -139,7 +139,6 @@
   "warehouseman.scan.scanner.title": "Scan a product",
   "warehouseman.scan.sku": "SKU: {sku}",
   "warehouseman.scan.stock.label": "In stock",
-  "warehouseman.scan.stock.none": "This product is in no warehouse.",
   "warehouseman.scan.stock.unavailable": "The product was found, but its stock could not be read. Scan it again to retry.",
   "warehouseman.scan.unknownBarcode": "Barcode {barcode} is unknown. No product in the catalog carries it.",
   "warehouseman.scan.unknownProduct": "Unnamed product",
@@ -150,6 +149,8 @@
   "warehouseman.scan.field.submitting": "Looking it up…",
   "warehouseman.scan.result": "What it is",
   "warehouseman.scan.stock.availableLabel": "Available",
+  "warehouseman.scan.stock.inWarehouse": "In {warehouse}",
+  "warehouseman.scan.stock.noWarehouse": "Stock needs an assigned warehouse. Ask the office to assign you one.",
   "warehouseman.stub.back": "Back",
   "warehouseman.stub.notImplemented": "This operation is not available yet."
 }
