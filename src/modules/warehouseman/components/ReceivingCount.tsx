@@ -2,11 +2,23 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Check, LockOpen, Pencil, Trash2 } from 'lucide-react'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Input } from '@open-mercato/ui/primitives/input'
+import { IconButton } from '@open-mercato/ui/primitives/icon-button'
 import { ComboboxInput } from '@open-mercato/ui/backend/inputs/ComboboxInput'
 import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import {
+  PANEL_ACTION,
+  PANEL_PRIMARY,
+  PanelCard,
+  PanelFooter,
+  ProgressStrip,
+  QtyStepper,
+  ScanField,
+  SectionLabel,
+} from './PanelUI'
 import { PanelLinkButton, ScreenEmpty, ScreenError, ScreenMessage } from './ReceivingStates'
 import {
   closePallet,
@@ -25,6 +37,7 @@ import {
   type ReceivingDocument,
 } from '../lib/receivingApi'
 import {
+  COUNT_QUANTITY_SCALE,
   formatCountQuantity,
   normalizeScannedCode,
   parseCountQuantity,
@@ -35,11 +48,14 @@ import {
 
 export type ReceivingCountProps = { receiptId: string; palletId: string }
 
+const DEFAULT_QUANTITY = '1'
+
 /**
  * The screen the whole feature exists for. A handheld scanner types the barcode and ends
  * with Enter, so the form submits on Enter and the barcode field takes focus back after
  * every submit — including a failed one, because the next thing that happens on the floor
- * is another scan.
+ * is another scan. The quantity stays at one between scans: counting is mostly one at a
+ * time, and the stepper is there for the cases that are not.
  */
 export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
   const t = useT()
@@ -50,10 +66,11 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
   const unknownProduct = t('pz.receiving.summary.unknownProduct')
 
   const [barcode, setBarcode] = React.useState('')
-  const [quantity, setQuantity] = React.useState('')
+  const [quantity, setQuantity] = React.useState(DEFAULT_QUANTITY)
   const [unknownBarcode, setUnknownBarcode] = React.useState<string | null>(null)
   const [formError, setFormError] = React.useState<string | null>(null)
   const [announcement, setAnnouncement] = React.useState('')
+  const [lastCounted, setLastCounted] = React.useState<{ product: string; quantity: string } | null>(null)
   const [submitting, setSubmitting] = React.useState(false)
   const [editing, setEditing] = React.useState<{ id: string; value: string } | null>(null)
   const [rowError, setRowError] = React.useState<{ id: string; message: string } | null>(null)
@@ -96,14 +113,12 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
       const counted = await countPalletLine({ palletId, catalogVariantId, quantity: parsed })
       const refreshed = await lines.refetch()
       const row = refreshed.data?.find((candidate) => candidate.catalogVariantId === catalogVariantId)
-      setAnnouncement(
-        t('warehouseman.receiving.count.added', undefined, {
-          product: productLabel(row?.name ?? resolvedName, unknownProduct),
-          quantity: formatCountQuantity(row?.quantity ?? counted.quantity),
-        }),
-      )
+      const product = productLabel(row?.name ?? resolvedName, unknownProduct)
+      const total = formatCountQuantity(row?.quantity ?? counted.quantity)
+      setLastCounted({ product, quantity: total })
+      setAnnouncement(t('warehouseman.receiving.count.added', undefined, { product, quantity: total }))
       setBarcode('')
-      setQuantity('')
+      setQuantity(DEFAULT_QUANTITY)
       setUnknownBarcode(null)
       setFormError(null)
       await invalidatePallets()
@@ -115,8 +130,7 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
     }
   }
 
-  async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
+  async function onScan() {
     setFormError(null)
     const scanned = normalizeScannedCode(barcode)
     if (!scanned) {
@@ -245,182 +259,201 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
   }
 
   const rows = lines.data ?? []
+  const countedTotal = formatCountQuantity(
+    rows.reduce((total, line) => total + (Number.parseFloat(line.quantity) || 0), 0).toFixed(COUNT_QUANTITY_SCALE),
+  )
+
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-xl font-semibold">
-          {t('warehouseman.receiving.count.title', undefined, {
-            documentNumber: document.data?.documentNumber ?? '',
-            code: pallet.code,
-          })}
-        </h2>
-        <p className="text-muted-foreground">
-          {t('warehouseman.receiving.list.supplier', undefined, {
-            supplier: document.data?.supplierName ?? '',
-          })}
-        </p>
-        <p className="text-muted-foreground">
-          {t('warehouseman.receiving.pallets.lineCount', undefined, { count: rows.length })}
-        </p>
-      </div>
+    <div className="flex flex-1 flex-col gap-4">
+      <ProgressStrip
+        label={t('warehouseman.receiving.count.counted', undefined, { quantity: countedTotal })}
+        detail={t('warehouseman.receiving.pallets.lineCount', undefined, { count: rows.length })}
+      />
+      <p className="text-base text-muted-foreground">
+        {document.data?.documentNumber ?? ''}
+        {document.data?.supplierName ? ` · ${document.data.supplierName}` : ''}
+      </p>
 
       {closed ? (
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-3">
           <ScreenError>{t('warehouseman.receiving.count.closed')}</ScreenError>
-          <Button type="button" size="lg" className="h-16 w-full text-lg" onClick={onReopen}>
+          <Button type="button" className={PANEL_PRIMARY} onClick={onReopen}>
+            <LockOpen aria-hidden="true" className="size-7" />
             {t('warehouseman.receiving.count.reopen')}
           </Button>
         </div>
-      ) : (
-        <Button type="button" size="lg" variant="outline" className="h-16 w-full text-lg" onClick={onClose}>
-          {t('warehouseman.receiving.count.close')}
-        </Button>
-      )}
-
-      <form className="flex flex-col gap-2" onSubmit={onSubmit}>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-          <label className="flex flex-1 flex-col gap-2">
-            <span className="text-lg">{t('warehouseman.receiving.count.barcode.label')}</span>
-            <Input
-              ref={barcodeRef}
-              value={barcode}
-              className="h-18"
-              inputClassName="h-full text-lg"
-              placeholder={t('warehouseman.receiving.count.barcode.placeholder')}
-              autoComplete="off"
-              disabled={closed || submitting}
-              onChange={(event) => setBarcode(event.target.value)}
-            />
-          </label>
-          <label className="flex flex-col gap-2 sm:w-40">
-            <span className="text-lg">{t('warehouseman.receiving.count.quantity.label')}</span>
-            <Input
-              value={quantity}
-              inputMode="decimal"
-              className="h-18"
-              inputClassName="h-full text-lg"
-              placeholder={t('warehouseman.receiving.count.quantity.placeholder')}
-              disabled={closed || submitting}
-              onChange={(event) => setQuantity(event.target.value)}
-            />
-          </label>
-        </div>
-        <Button type="submit" size="lg" className="h-16 w-full text-lg" disabled={closed || submitting}>
-          {t('warehouseman.receiving.count.submit')}
-        </Button>
-      </form>
-
-      {formError ? <ScreenError>{formError}</ScreenError> : null}
-
-      {unknownBarcode ? (
-        <label className="flex flex-col gap-2">
-          <span className="text-lg">{t('warehouseman.receiving.count.productSearch.label')}</span>
-          <ComboboxInput
-            value=""
-            onChange={(variantId) => {
-              if (variantId) void recordCount(variantId, null)
-            }}
-            placeholder={t('warehouseman.receiving.count.productSearch.placeholder')}
-            loadSuggestions={searchCatalogVariants}
-            allowCustomValues={false}
-            clearable={false}
-            disabled={closed || submitting}
-          />
-        </label>
       ) : null}
 
-      <p role="status" aria-live="polite" className="text-lg text-muted-foreground">
-        {announcement}
-      </p>
+      {/* The counting controls keep the wireframe's narrower column; the list takes the rest. */}
+      <div className="flex flex-col gap-4 lg:grid lg:grid-cols-5 lg:items-start lg:gap-6">
+        <div className="flex flex-col gap-4 lg:col-span-2">
+          <ScanField
+            label={t('warehouseman.receiving.count.barcode.label')}
+            placeholder={t('warehouseman.receiving.count.barcode.placeholder')}
+            value={barcode}
+            onChange={setBarcode}
+            onSubmit={onScan}
+            submitLabel={t('warehouseman.receiving.count.submit')}
+            disabled={closed || submitting}
+            emphasis={!closed}
+            inputRef={barcodeRef}
+          />
 
-      {rows.length === 0 ? (
-        <ScreenEmpty
-          title={t('warehouseman.receiving.count.empty.title')}
-          description={t('warehouseman.receiving.count.empty.description')}
-        />
-      ) : (
-        <ul className="flex flex-col gap-4">
-          {rows.map((line) => (
-            <li key={line.id} className="flex flex-col gap-2 rounded-md border border-border p-4 text-lg">
-              <span className="font-semibold">{productLabel(line.name, unknownProduct)}</span>
-              <span className="text-muted-foreground">{line.sku ?? '—'}</span>
-              {editing?.id === line.id ? (
-                <div className="flex flex-col gap-2">
-                  <label className="flex flex-col gap-2">
-                    <span className="text-lg">
-                      {t('warehouseman.receiving.count.edit', undefined, {
-                        product: productLabel(line.name, unknownProduct),
-                      })}
-                    </span>
-                    <Input
-                      value={editing.value}
-                      inputMode="decimal"
-                      className="h-18"
-                      inputClassName="h-full text-lg"
-                      autoFocus
-                      onChange={(event) => setEditing({ id: line.id, value: event.target.value })}
-                    />
-                  </label>
-                  <Button type="button" size="lg" className="h-16 w-full text-lg" onClick={() => onSaveEdit(line)}>
-                    {t('warehouseman.receiving.count.editSave')}
-                  </Button>
-                  <Button
-                    type="button"
-                    size="lg"
-                    variant="outline"
-                    className="h-16 w-full text-lg"
-                    onClick={() => {
-                      setEditing(null)
-                      setRowError(null)
-                    }}
-                  >
-                    {t('warehouseman.receiving.count.editCancel')}
-                  </Button>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  <span className="font-semibold">{formatCountQuantity(line.quantity)}</span>
-                  <Button
-                    type="button"
-                    size="lg"
-                    variant="outline"
-                    className="h-16 w-full text-lg"
-                    disabled={closed}
-                    onClick={() => {
-                      setRowError(null)
-                      setEditing({ id: line.id, value: formatCountQuantity(line.quantity) })
-                    }}
-                  >
-                    {t('warehouseman.receiving.count.edit', undefined, {
-                      product: productLabel(line.name, unknownProduct),
-                    })}
-                  </Button>
-                  <Button
-                    type="button"
-                    size="lg"
-                    variant="outline"
-                    className="h-16 w-full text-lg"
-                    disabled={closed}
-                    onClick={() => onRemove(line)}
-                  >
-                    {t('warehouseman.receiving.count.remove', undefined, {
-                      product: productLabel(line.name, unknownProduct),
-                    })}
-                  </Button>
-                </div>
-              )}
-              {rowError?.id === line.id ? <ScreenError>{rowError.message}</ScreenError> : null}
-            </li>
-          ))}
-        </ul>
-      )}
+          <QtyStepper
+            label={t('warehouseman.receiving.count.quantity.label')}
+            value={quantity}
+            onChange={setQuantity}
+            decrementLabel={t('warehouseman.receiving.count.quantity.decrement')}
+            incrementLabel={t('warehouseman.receiving.count.quantity.increment')}
+            disabled={closed || submitting}
+          />
 
-      <PanelLinkButton href={receivingSummaryHref(receiptId)}>
-        {t('warehouseman.receiving.count.summary')}
-      </PanelLinkButton>
-      <PanelLinkButton href={receivingReceiptHref(receiptId)}>
-        {t('warehouseman.receiving.count.backToPallets')}
-      </PanelLinkButton>
+          {formError ? <ScreenError>{formError}</ScreenError> : null}
+
+          {unknownBarcode ? (
+            <label className="flex flex-col gap-2">
+              <span className="text-lg font-semibold">{t('warehouseman.receiving.count.productSearch.label')}</span>
+              <ComboboxInput
+                value=""
+                onChange={(variantId) => {
+                  if (variantId) void recordCount(variantId, null)
+                }}
+                placeholder={t('warehouseman.receiving.count.productSearch.placeholder')}
+                loadSuggestions={searchCatalogVariants}
+                allowCustomValues={false}
+                clearable={false}
+                disabled={closed || submitting}
+              />
+            </label>
+          ) : null}
+
+          {lastCounted ? (
+            <PanelCard className="flex items-center gap-3 border-status-success-border bg-status-success-bg">
+              <Check className="size-8 shrink-0 text-status-success-text" aria-hidden="true" />
+              <span className="flex min-w-0 flex-col">
+                <span className="truncate text-lg font-bold">{lastCounted.product}</span>
+                <span className="text-base">
+                  {t('warehouseman.receiving.count.lastScan', undefined, { quantity: lastCounted.quantity })}
+                </span>
+              </span>
+            </PanelCard>
+          ) : null}
+
+          <p role="status" aria-live="polite" className="sr-only">
+            {announcement}
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-3 lg:col-span-3">
+          <SectionLabel>{t('warehouseman.receiving.count.onPallet')}</SectionLabel>
+          {rows.length === 0 ? (
+            <ScreenEmpty
+              title={t('warehouseman.receiving.count.empty.title')}
+              description={t('warehouseman.receiving.count.empty.description')}
+            />
+          ) : (
+            <ul className="flex flex-col gap-3">
+              {rows.map((line) => (
+                <li key={line.id} className="rounded-lg border-2 border-border bg-card p-3">
+                  {editing?.id === line.id ? (
+                    <div className="flex flex-col gap-3">
+                      <label className="flex flex-col gap-2">
+                        <span className="text-lg font-semibold">
+                          {t('warehouseman.receiving.count.edit', undefined, {
+                            product: productLabel(line.name, unknownProduct),
+                          })}
+                        </span>
+                        <Input
+                          value={editing.value}
+                          inputMode="decimal"
+                          className="h-20 border-2 px-4"
+                          inputClassName="h-full text-2xl font-bold"
+                          autoFocus
+                          onChange={(event) => setEditing({ id: line.id, value: event.target.value })}
+                        />
+                      </label>
+                      <div className="flex gap-2">
+                        <Button type="button" className={PANEL_ACTION} onClick={() => onSaveEdit(line)}>
+                          {t('warehouseman.receiving.count.editSave')}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className={`${PANEL_ACTION} border-2`}
+                          onClick={() => {
+                            setEditing(null)
+                            setRowError(null)
+                          }}
+                        >
+                          {t('warehouseman.receiving.count.editCancel')}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-3">
+                      <span className="flex min-w-0 flex-1 flex-col">
+                        <span className="truncate text-lg font-bold">
+                          {productLabel(line.name, unknownProduct)}
+                        </span>
+                        <span className="truncate font-mono text-base text-muted-foreground">
+                          {line.sku ?? '—'}
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-2xl font-bold tabular-nums">
+                        {formatCountQuantity(line.quantity)}
+                      </span>
+                      <IconButton
+                        type="button"
+                        variant="outline"
+                        className="size-14 shrink-0 border-2"
+                        aria-label={t('warehouseman.receiving.count.edit', undefined, {
+                          product: productLabel(line.name, unknownProduct),
+                        })}
+                        disabled={closed}
+                        onClick={() => {
+                          setRowError(null)
+                          setEditing({ id: line.id, value: formatCountQuantity(line.quantity) })
+                        }}
+                      >
+                        <Pencil className="size-6" aria-hidden="true" />
+                      </IconButton>
+                      <IconButton
+                        type="button"
+                        variant="outline"
+                        className="size-14 shrink-0 border-2 text-destructive"
+                        aria-label={t('warehouseman.receiving.count.remove', undefined, {
+                          product: productLabel(line.name, unknownProduct),
+                        })}
+                        disabled={closed}
+                        onClick={() => onRemove(line)}
+                      >
+                        <Trash2 className="size-6" aria-hidden="true" />
+                      </IconButton>
+                    </div>
+                  )}
+                  {rowError?.id === line.id ? (
+                    <div className="mt-3">
+                      <ScreenError>{rowError.message}</ScreenError>
+                    </div>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+
+      <PanelFooter>
+        {closed ? null : (
+          <Button type="button" className={PANEL_PRIMARY} onClick={onClose}>
+            <Check aria-hidden="true" className="size-7" />
+            {t('warehouseman.receiving.count.close')}
+          </Button>
+        )}
+        <PanelLinkButton href={receivingSummaryHref(receiptId)}>
+          {t('warehouseman.receiving.count.summary')}
+        </PanelLinkButton>
+      </PanelFooter>
       {ConfirmDialogElement}
     </div>
   )

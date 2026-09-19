@@ -5,7 +5,13 @@ import { loadPanelContext } from '../../../lib/panelContext'
 export default async function ScanPage() {
   const { userLabel, warehouse } = await loadPanelContext()
   return (
-    <PanelShell userLabel={userLabel} warehouseName={warehouse?.name ?? null}>
+    <PanelShell
+      userLabel={userLabel}
+      warehouseName={warehouse?.name ?? null}
+      titleKey="warehouseman.actions.scan"
+      backHref="/warehouseman"
+      backLabelKey="warehouseman.panel.backToHome"
+    >
       <StubAction titleKey="warehouseman.actions.scan" />
     </PanelShell>
   )

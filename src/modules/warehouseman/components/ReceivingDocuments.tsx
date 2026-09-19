@@ -2,11 +2,12 @@
 import * as React from 'react'
 import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
+import { ChevronRight, Warehouse } from 'lucide-react'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { ComboboxInput } from '@open-mercato/ui/backend/inputs/ComboboxInput'
 import { formatDisplayDate } from '@open-mercato/ui/primitives/date-format'
 import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
-import { PANEL_HOME_PATH } from './PanelLoginForm'
+import { SectionLabel } from './PanelUI'
 import { PanelLinkButton, ScreenEmpty, ScreenError, ScreenMessage } from './ReceivingStates'
 import {
   fetchReceivingDocuments,
@@ -16,6 +17,7 @@ import {
   type ReceivingDocument,
 } from '../lib/receivingApi'
 import { receivingReceiptHref, type WarehouseFilter } from '../lib/receivingPanel'
+import { PANEL_HOME_PATH } from './PanelLoginForm'
 
 export type ReceivingDocumentsProps = {
   assignedWarehouseId: string | null
@@ -56,12 +58,27 @@ export function ReceivingDocuments({ assignedWarehouseId }: ReceivingDocumentsPr
   const documents = data ?? []
   return (
     <div className="flex flex-col gap-4">
-      <h2 className="text-xl font-semibold">{t('warehouseman.receiving.list.title')}</h2>
+      <div className="flex flex-wrap items-center gap-3">
+        <SectionLabel className="flex-1">
+          {t('warehouseman.receiving.list.count', undefined, { count: documents.length })}
+        </SectionLabel>
+        {widening ? null : (
+          <Button
+            type="button"
+            variant="outline"
+            className="h-14 border-2 px-4 text-lg font-semibold"
+            onClick={() => setWidening(true)}
+          >
+            <Warehouse aria-hidden="true" className="size-6" />
+            {t('warehouseman.receiving.list.warehouse.widen')}
+          </Button>
+        )}
+      </div>
 
       {widening ? (
         <label className="flex flex-col gap-2">
           {/* `ComboboxInput` takes no id and no `aria-label`, so the label has to contain it. */}
-          <span className="text-lg">{t('warehouseman.receiving.list.warehouse.label')}</span>
+          <span className="text-lg font-semibold">{t('warehouseman.receiving.list.warehouse.label')}</span>
           <ComboboxInput
             value={warehouse ?? ''}
             onChange={(next) => setWarehouse(next || null)}
@@ -73,17 +90,7 @@ export function ReceivingDocuments({ assignedWarehouseId }: ReceivingDocumentsPr
             clearLabel={t('warehouseman.receiving.list.warehouse.all')}
           />
         </label>
-      ) : (
-        <Button
-          type="button"
-          size="lg"
-          variant="outline"
-          className="h-16 w-full text-lg"
-          onClick={() => setWidening(true)}
-        >
-          {t('warehouseman.receiving.list.warehouse.widen')}
-        </Button>
-      )}
+      ) : null}
 
       {documents.length === 0 ? (
         <ScreenEmpty
@@ -91,23 +98,33 @@ export function ReceivingDocuments({ assignedWarehouseId }: ReceivingDocumentsPr
           description={t('warehouseman.receiving.list.empty.description')}
         />
       ) : (
-        <ul className="flex flex-col gap-4">
+        <ul className="flex flex-col gap-4 md:grid md:grid-cols-2">
           {documents.map((document) => (
             <li key={document.id}>
               <Link
                 href={receivingReceiptHref(document.id)}
-                className="flex min-h-16 flex-col gap-1 rounded-md border border-border p-4 text-lg hover:bg-muted focus-visible:outline-none focus-visible:shadow-focus"
+                className="flex h-full flex-col gap-3 rounded-lg border-2 border-border bg-card p-4 hover:bg-accent focus-visible:outline-none focus-visible:shadow-focus"
               >
-                <span className="font-semibold">{document.documentNumber}</span>
-                <span className="text-muted-foreground">
-                  {t('warehouseman.receiving.list.supplier', undefined, { supplier: document.supplierName })}
+                <span className="flex items-center gap-3">
+                  <span className="text-2xl font-bold tracking-tight">{document.documentNumber}</span>
+                  <ChevronRight className="ml-auto size-7 shrink-0" aria-hidden="true" />
                 </span>
-                <span className="text-muted-foreground">
-                  {formatDisplayDate(document.documentDate, locale) ?? '—'}
-                </span>
-                <span className="text-muted-foreground">
-                  {t('warehouseman.receiving.list.palletCount', undefined, { count: document.palletCount ?? 0 })}
-                </span>
+                <dl className="flex flex-wrap gap-x-6 gap-y-2">
+                  <DocumentFact label={t('warehouseman.receiving.list.supplier.label')}>
+                    {document.supplierName}
+                  </DocumentFact>
+                  <DocumentFact label={t('warehouseman.receiving.list.date.label')}>
+                    {formatDisplayDate(document.documentDate, locale) ?? '—'}
+                  </DocumentFact>
+                  <DocumentFact label={t('warehouseman.receiving.list.pallets.label')}>
+                    {document.palletCount ?? 0}
+                  </DocumentFact>
+                  {document.warehouseSnapshot ? (
+                    <DocumentFact label={t('warehouseman.receiving.list.warehouse.label')}>
+                      {document.warehouseSnapshot.name}
+                    </DocumentFact>
+                  ) : null}
+                </dl>
               </Link>
             </li>
           ))}
@@ -115,6 +132,15 @@ export function ReceivingDocuments({ assignedWarehouseId }: ReceivingDocumentsPr
       )}
 
       <PanelLinkButton href={PANEL_HOME_PATH}>{t('warehouseman.stub.back')}</PanelLinkButton>
+    </div>
+  )
+}
+
+function DocumentFact({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex min-w-0 flex-col">
+      <dt className="text-sm text-muted-foreground">{label}</dt>
+      <dd className="truncate text-lg font-semibold">{children}</dd>
     </div>
   )
 }
