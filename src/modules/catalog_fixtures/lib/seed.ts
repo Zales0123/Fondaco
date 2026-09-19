@@ -1,13 +1,10 @@
 import type { AwilixContainer } from 'awilix'
 import type { EntityManager } from '@mikro-orm/postgresql'
-import type { CommandBus, CommandRuntimeContext } from '@open-mercato/shared/lib/commands'
+import type { CommandBus } from '@open-mercato/shared/lib/commands'
 import { allocateFixtureEan13, FIXTURE_GTIN_TYPE } from './barcodes'
+import { buildCommandContext, type CatalogFixtureScope } from './commandContext'
 
-export type CatalogFixtureScope = {
-  tenantId: string
-  organizationId: string
-  userId?: string | null
-}
+export type { CatalogFixtureScope }
 
 export type AssignBarcodesSummary = {
   total: number
@@ -20,37 +17,6 @@ type VariantRow = {
   id: string
   sku: string | null
   barcode: string | null
-}
-
-/**
- * Commands, not a direct ORM write.
- *
- * `catalog.variants.update` re-validates the GTIN against the merged record
- * (zod alone cannot see the stored half of the gtinType/barcode pair), enforces
- * tenant and organization scope, and emits the lifecycle events that keep audit,
- * undo and the search index in step. A `em.nativeUpdate` loop here would set the
- * column and silently skip every one of those.
- */
-function buildCommandContext(
-  scope: CatalogFixtureScope,
-  container: AwilixContainer,
-): CommandRuntimeContext {
-  return {
-    container,
-    auth: {
-      sub: scope.userId ?? undefined,
-      tenantId: scope.tenantId,
-      orgId: scope.organizationId,
-    },
-    organizationScope: {
-      selectedId: scope.organizationId,
-      filterIds: [scope.organizationId],
-      allowedIds: [scope.organizationId],
-      tenantId: scope.tenantId,
-    },
-    selectedOrganizationId: scope.organizationId,
-    organizationIds: [scope.organizationId],
-  } as CommandRuntimeContext
 }
 
 export async function assignFixtureBarcodes(
