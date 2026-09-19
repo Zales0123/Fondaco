@@ -2,7 +2,7 @@
 import * as React from 'react'
 import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeftRight, ClipboardCheck, PackageOpen, ScanLine, type LucideIcon } from 'lucide-react'
+import { ArrowLeftRight, PackageOpen, ScanLine, type LucideIcon } from 'lucide-react'
 import { cn } from '@open-mercato/shared/lib/utils'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { fetchReceivingDocuments, type ReceivingDocument } from '../lib/receivingApi'
@@ -14,7 +14,6 @@ const ACTIONS: readonly PanelAction[] = [
   { href: RECEIVING_LIST_HREF, labelKey: 'warehouseman.actions.receiving', Icon: PackageOpen, primary: true },
   { href: '/warehouseman/scan', labelKey: 'warehouseman.actions.scan', Icon: ScanLine },
   { href: '/warehouseman/transfer', labelKey: 'warehouseman.actions.transfer', Icon: ArrowLeftRight },
-  { href: '/warehouseman/stocktake', labelKey: 'warehouseman.actions.stocktake', Icon: ClipboardCheck },
 ]
 
 export function PanelHome({ assignedWarehouseId }: { assignedWarehouseId: string | null }) {
