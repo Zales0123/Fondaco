@@ -28,6 +28,8 @@ import type { CrudEmitContext, CrudEventsConfig, CrudIndexerConfig } from '@open
 import type { DataEngine } from '@open-mercato/shared/lib/data/engine'
 import type { QueryEngine } from '@open-mercato/shared/lib/query/types'
 import { escapeLikePattern } from '@open-mercato/shared/lib/db/escapeLikePattern'
+import { createLogger } from '@open-mercato/shared/lib/logger'
+import type { EventBus } from '@open-mercato/events'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { E } from '@/.mercato/generated/entities.ids.generated'
 import {
@@ -44,6 +46,8 @@ import {
   type GoodsReceiptWriteInput,
   type TranslateFn,
 } from '../lib/goodsReceiptInput'
+
+const logger = createLogger('pz').child({ component: 'goods-receipt-commands' })
 
 export const GOODS_RECEIPT_ENTITY_ID = E.pz.goods_receipt
 export const DOCUMENT_NUMBER_UNIQUE_INDEX = 'pz_goods_receipts_document_number_unique_idx'
@@ -153,12 +157,11 @@ type WarehouseRow = { id: string; name: string | null; code: string | null }
  * caller's trusted scope — this module holds scalar ids only and never an ORM relation into
  * `wms` or `catalog` (ADR-0004).
  */
-export async function requireWarehouse(
+async function findWarehouse(
   ctx: CommandRuntimeContext,
   scope: GoodsReceiptScope,
   warehouseId: string,
-  translate: TranslateFn,
-): Promise<WarehouseRow> {
+): Promise<WarehouseRow | null> {
   const queryEngine = ctx.container.resolve<QueryEngine>('queryEngine')
   const result = await queryEngine.query<WarehouseRow>(E.wms.warehouse, {
     tenantId: scope.tenantId,
@@ -167,7 +170,16 @@ export async function requireWarehouse(
     filters: { id: warehouseId },
     page: { page: 1, pageSize: 1 },
   })
-  const warehouse = result.items[0]
+  return result.items[0] ?? null
+}
+
+export async function requireWarehouse(
+  ctx: CommandRuntimeContext,
+  scope: GoodsReceiptScope,
+  warehouseId: string,
+  translate: TranslateFn,
+): Promise<WarehouseRow> {
+  const warehouse = await findWarehouse(ctx, scope, warehouseId)
   if (!warehouse) {
     throw goodsReceiptFieldError(validationFailed(translate), {
       warehouseId: translate('pz.goodsReceipts.errors.warehouseMissing', 'That warehouse no longer exists.'),
@@ -1313,3 +1325,138 @@ const deleteGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
 
 registerCommand(updateGoodsReceiptCommand)
 registerCommand(deleteGoodsReceiptCommand)
+
+/**
+ * Confirmation is where the warehouse stops being a live reference and becomes part of the
+ * record. A warehouse that has since been deleted is a data problem to surface rather than
+ * something to snapshot around, so it refuses instead of freezing a name nobody can look up
+ * any more (ADR-0007).
+ */
+async function snapshotWarehouseForConfirmation(
+  ctx: CommandRuntimeContext,
+  scope: GoodsReceiptScope,
+  warehouseId: string,
+  translate: TranslateFn,
+): Promise<GoodsReceiptWarehouseSnapshot> {
+  const warehouse = await findWarehouse(ctx, scope, warehouseId)
+  if (!warehouse) {
+    throw conflict(
+      translate(
+        'pz.goodsReceipts.errors.confirmWarehouseMissing',
+        'This goods receipt names a warehouse that no longer exists, so it cannot be confirmed.',
+      ),
+    )
+  }
+  return { name: warehouse.name ?? '', code: warehouse.code ?? '' }
+}
+
+/**
+ * Confirming records that a delivery happened. It moves no stock: no `wms` balance,
+ * movement, lot or reservation is created or changed, and `wms.inventory.receive` is not
+ * called (ADR-0005). What it emits is `pz.goods_receipt.confirmed`, carrying the header and
+ * its lines, which is the seam a stock-posting subscriber would attach to later without
+ * touching this module.
+ *
+ * It is its own command rather than a status written through update, because it carries its
+ * own permission and its own one-way transition (ADR-0006), and it is deliberately not
+ * undoable: the answer to a wrong quantity is a correcting document, not a reversal.
+ */
+const confirmGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsReceipt> = {
+  id: 'pz.goodsReceipts.confirm',
+  isUndoable: false,
+  async execute(rawInput, ctx) {
+    const { translate } = await resolveTranslations()
+    const scope = ensureGoodsReceiptScope(ctx, translate)
+    const id = requireRecordId(rawInput, translate)
+    const expectedVersion = requireExpectedVersion(ctx, translate)
+
+    const em = (ctx.container.resolve('em') as EntityManager).fork()
+
+    let receipt!: GoodsReceipt
+    let lines: GoodsReceiptLine[] = []
+    await runCrudCommandWrite<GoodsReceipt>({
+      ctx,
+      em,
+      entityId: GOODS_RECEIPT_ENTITY_ID,
+      action: 'updated',
+      scope,
+      events: goodsReceiptCrudEvents,
+      indexer: goodsReceiptCrudIndexer,
+      syncOrigin: ctx.syncOrigin,
+      phases: [
+        async ({ em: tx }) => {
+          // The same guard an edit runs, so a second confirmation meets the same refusal:
+          // the row is held until commit, and a concurrent confirm cannot slip between the
+          // status check and the write.
+          receipt = await lockDraftForWrite(tx, scope, id, expectedVersion, translate)
+          lines = await findScopedLines(tx, id, scope)
+        },
+        async ({ em: tx }) => {
+          if (lines.length === 0) {
+            // Create and update both refuse a goods receipt without lines, so this is not
+            // reachable through the public API — but confirmation is where the rule finally
+            // matters, so it is enforced rather than assumed.
+            throw conflict(
+              translate(
+                'pz.goodsReceipts.errors.confirmNoLines',
+                'A goods receipt without lines cannot be confirmed.',
+              ),
+            )
+          }
+          receipt.warehouseSnapshot = await snapshotWarehouseForConfirmation(
+            ctx,
+            scope,
+            receipt.warehouseId,
+            translate,
+          )
+          receipt.status = 'confirmed'
+          receipt.updatedAt = new Date()
+          tx.persist(receipt)
+        },
+      ],
+      sideEffect: () => ({
+        entity: receipt,
+        identifiers: { id, tenantId: scope.tenantId, organizationId: scope.organizationId },
+      }),
+    })
+
+    const confirmed = serializeGoodsReceipt(receipt, lines)
+    capturedAggregates.set(receipt, confirmed)
+    await emitConfirmed(ctx, confirmed)
+    return receipt
+  },
+  captureAfter: (_input, result, ctx) => snapshotAggregate(ctx, result),
+  buildLog: async ({ result, snapshots }) => {
+    const { translate } = await resolveTranslations()
+    return {
+      actionLabel: translate('pz.audit.goodsReceipts.confirm', 'Confirm goods receipt'),
+      resourceKind: 'pz.goods_receipt',
+      resourceId: String(result.id),
+      tenantId: result.tenantId,
+      organizationId: result.organizationId,
+      snapshotAfter: snapshots.after as SerializedGoodsReceipt,
+    }
+  },
+}
+
+/**
+ * Emitted after the commit, so a subscriber can never act on a confirmation that did not
+ * happen. It is persistent because the whole point of the event is that work can be hung
+ * off it later; losing it because a subscriber was momentarily unavailable would make it
+ * useless as a seam. A broadcast failure must not fail a write that has already landed, so
+ * it is reported and swallowed.
+ */
+async function emitConfirmed(ctx: CommandRuntimeContext, document: SerializedGoodsReceipt): Promise<void> {
+  try {
+    const bus = ctx.container.resolve<EventBus>('eventBus')
+    await bus.emit('pz.goods_receipt.confirmed', document, {
+      persistent: true,
+      tenantId: document.tenantId,
+      organizationId: document.organizationId,
+    })
+  } catch (error) {
+    logger.error('Goods receipt confirmation broadcast failed', { err: error, goodsReceiptId: document.id })
+  }
+}
+
+registerCommand(confirmGoodsReceiptCommand)

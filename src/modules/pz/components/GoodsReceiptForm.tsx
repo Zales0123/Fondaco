@@ -1,6 +1,7 @@
 "use client"
 import * as React from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { CrudForm, type CrudField, type CrudFieldOption, type CrudFormGroup } from '@open-mercato/ui/backend/CrudForm'
 import { createCrud, deleteCrud, fetchCrudList, updateCrud } from '@open-mercato/ui/backend/utils/crud'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
@@ -8,9 +9,17 @@ import { withFlash } from '@open-mercato/ui/backend/utils/flash'
 import { ErrorMessage, RecordNotFoundState } from '@open-mercato/ui/backend/detail'
 import { Alert } from '@open-mercato/ui/primitives/alert'
 import { Button } from '@open-mercato/ui/primitives/button'
+import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
+import { surfaceRecordConflict } from '@open-mercato/ui/backend/conflicts'
+import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
 import { getScheduleLocale } from '@open-mercato/ui/backend/schedule/localization'
-import { GOODS_RECEIPTS_ENTITY_ID, GOODS_RECEIPTS_LIST_HREF } from './goodsReceiptsPresentation'
+import {
+  confirmGoodsReceipt,
+  GOODS_RECEIPTS_ENTITY_ID,
+  GOODS_RECEIPTS_LIST_HREF,
+  useGoodsReceiptPermissions,
+} from './goodsReceiptsPresentation'
 import { GoodsReceiptLinesEditor } from './GoodsReceiptLinesEditor'
 import type { GoodsReceiptListItem } from '../lib/goodsReceiptListItem'
 import {
@@ -222,6 +231,10 @@ export function GoodsReceiptEditForm({ id }: { id: string }) {
   const [loading, setLoading] = React.useState(true)
   const [loadError, setLoadError] = React.useState<string | null>(null)
   const [isMissing, setIsMissing] = React.useState(false)
+  const [confirming, setConfirming] = React.useState(false)
+  const { canConfirm } = useGoodsReceiptPermissions()
+  const { confirm, ConfirmDialogElement } = useConfirmDialog()
+  const router = useRouter()
 
   React.useEffect(() => {
     let cancelled = false
@@ -259,6 +272,29 @@ export function GoodsReceiptEditForm({ id }: { id: string }) {
     () => withFlash(GOODS_RECEIPTS_LIST_HREF, t('pz.goodsReceipts.form.flash.deleted'), 'success'),
     [t],
   )
+  /**
+   * Confirmation is offered beside the form rather than as a status field, because it is a
+   * one-way transition with its own permission rather than another edit (ADR-0006). The
+   * warning is the point: nothing undoes it afterwards.
+   */
+  const handleConfirm = React.useCallback(async () => {
+    const acknowledged = await confirm({
+      title: t('pz.goodsReceipts.form.confirm.title'),
+      description: t('pz.goodsReceipts.form.confirm.description'),
+      confirmText: t('pz.goodsReceipts.form.confirm.action'),
+    })
+    if (!acknowledged) return
+    setConfirming(true)
+    try {
+      await confirmGoodsReceipt(id, initial?.updatedAt ?? null)
+      router.push(withFlash(GOODS_RECEIPTS_LIST_HREF, t('pz.goodsReceipts.form.flash.confirmed'), 'success'))
+    } catch (error) {
+      setConfirming(false)
+      if (surfaceRecordConflict(error, t)) return
+      flash(error instanceof Error && error.message ? error.message : t('pz.goodsReceipts.form.error.confirm'), 'error')
+    }
+  }, [confirm, id, initial?.updatedAt, router, t])
+
   const fallbackValues = React.useMemo<GoodsReceiptFormValues>(() => ({
     id,
     documentNumber: '',
@@ -293,7 +329,14 @@ export function GoodsReceiptEditForm({ id }: { id: string }) {
     )
   }
 
+  const confirmAction = canConfirm && status === 'draft' ? (
+    <Button type="button" variant="outline" onClick={() => { void handleConfirm() }} disabled={confirming}>
+      {t('pz.goodsReceipts.form.actions.confirm')}
+    </Button>
+  ) : null
+
   return (
+    <>
     <CrudForm<GoodsReceiptFormValues>
       title={t('pz.goodsReceipts.form.edit.title')}
       titleHeadingLevel={1}
@@ -314,7 +357,10 @@ export function GoodsReceiptEditForm({ id }: { id: string }) {
       onDelete={async () => {
         await deleteCrud('pz/goods-receipts', String(id))
       }}
+      extraActions={confirmAction}
     />
+    {ConfirmDialogElement}
+    </>
   )
 }
 

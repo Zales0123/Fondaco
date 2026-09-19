@@ -1,10 +1,12 @@
 "use client"
 import * as React from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { apiCall, readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
+import { apiCall, readApiResultOrThrow, withScopedApiRequestHeaders } from '@open-mercato/ui/backend/utils/apiCall'
+import { buildOptimisticLockHeader } from '@open-mercato/ui/backend/utils/optimisticLock'
 
 export const GOODS_RECEIPTS_ENTITY_ID = 'pz:goods_receipt'
 export const GOODS_RECEIPTS_MANAGE_FEATURE = 'pz.goodsReceipts.manage'
+export const GOODS_RECEIPTS_CONFIRM_FEATURE = 'pz.goodsReceipts.confirm'
 export const GOODS_RECEIPTS_TABLE_ID = 'pz.goodsReceipts'
 export const GOODS_RECEIPTS_LIST_HREF = '/backend/wms/goods-receipts'
 export const GOODS_RECEIPTS_CREATE_HREF = `${GOODS_RECEIPTS_LIST_HREF}/create`
@@ -50,28 +52,45 @@ export function useWarehouseNames(warehouseIds: readonly string[]): ReadonlyMap<
   }, [data?.items])
 }
 
+export type GoodsReceiptPermissions = {
+  canManage: boolean
+  canConfirm: boolean
+}
+
+const NO_PERMISSIONS: GoodsReceiptPermissions = { canManage: false, canConfirm: false }
+
 /**
- * Backend authorization is always the authority; this only stops the UI offering a door
- * the caller will be refused at. The check is wildcard-aware because it asks the server,
- * which resolves `pz.*` and `*` grants the same way the routes do.
+ * Backend authorization is always the authority; this only stops the UI offering a door the
+ * caller will be refused at. The check is wildcard-aware because it asks the server, which
+ * resolves `pz.*` and `*` grants the same way the routes do.
+ *
+ * Editing and confirming are separate grants — a warehouse clerk may enter deliveries
+ * without being the person who finalises them (ADR-0006) — so both are asked for at once
+ * and answered independently.
  */
-export function useCanManageGoodsReceipts(): boolean {
-  const [canManage, setCanManage] = React.useState(false)
+export function useGoodsReceiptPermissions(): GoodsReceiptPermissions {
+  const [permissions, setPermissions] = React.useState(NO_PERMISSIONS)
 
   React.useEffect(() => {
     let cancelled = false
     async function load() {
+      const features = [GOODS_RECEIPTS_MANAGE_FEATURE, GOODS_RECEIPTS_CONFIRM_FEATURE]
       try {
         const call = await apiCall<{ ok?: boolean; granted?: string[] }>('/api/auth/feature-check', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ features: [GOODS_RECEIPTS_MANAGE_FEATURE] }),
+          body: JSON.stringify({ features }),
         })
         if (cancelled) return
-        const granted = Array.isArray(call.result?.granted) ? call.result.granted : []
-        setCanManage(call.result?.ok === true || granted.includes(GOODS_RECEIPTS_MANAGE_FEATURE))
+        // `ok` means every feature asked for was granted; otherwise only the listed ones were.
+        const granted = new Set(Array.isArray(call.result?.granted) ? call.result.granted : [])
+        const holds = (feature: string) => call.result?.ok === true || granted.has(feature)
+        setPermissions({
+          canManage: holds(GOODS_RECEIPTS_MANAGE_FEATURE),
+          canConfirm: holds(GOODS_RECEIPTS_CONFIRM_FEATURE),
+        })
       } catch {
-        if (!cancelled) setCanManage(false)
+        if (!cancelled) setPermissions(NO_PERMISSIONS)
       }
     }
     load()
@@ -80,5 +99,26 @@ export function useCanManageGoodsReceipts(): boolean {
     }
   }, [])
 
-  return canManage
+  return permissions
+}
+
+/**
+ * Confirmation is its own endpoint with its own permission, so it does not go through the
+ * CRUD update helper. It carries the version the user was shown, so confirming a document
+ * someone else has since changed fails with a conflict instead of freezing a snapshot of
+ * something this user never read.
+ */
+export async function confirmGoodsReceipt(id: string, expectedVersion: string | null): Promise<void> {
+  await withScopedApiRequestHeaders(buildOptimisticLockHeader(expectedVersion), async () => {
+    const call = await apiCall<{ error?: string }>('/api/pz/goods-receipts/confirm', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id }),
+    })
+    if (!call.response.ok) {
+      throw Object.assign(new Error(call.result?.error ?? 'Goods receipt confirmation failed'), {
+        status: call.response.status,
+      })
+    }
+  })
 }

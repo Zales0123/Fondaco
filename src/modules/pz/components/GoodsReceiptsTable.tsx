@@ -23,7 +23,8 @@ import {
   GOODS_RECEIPTS_ENTITY_ID,
   GOODS_RECEIPTS_LIST_HREF,
   GOODS_RECEIPTS_TABLE_ID,
-  useCanManageGoodsReceipts,
+  confirmGoodsReceipt,
+  useGoodsReceiptPermissions,
   useWarehouseNames,
 } from './goodsReceiptsPresentation'
 
@@ -132,7 +133,7 @@ export default function GoodsReceiptsTable() {
 
   const columns = React.useMemo(() => buildColumns(t, locale), [locale, t])
   const editHref = (row: GoodsReceiptRow) => `${GOODS_RECEIPTS_LIST_HREF}/${row.id}/edit`
-  const canManage = useCanManageGoodsReceipts()
+  const { canManage, canConfirm } = useGoodsReceiptPermissions()
   const createLabel = t('pz.goodsReceipts.table.actions.create')
   // Offering a create action to someone the create page will refuse is a dead end, not a
   // permission check — the route metadata stays the authority either way.
@@ -169,6 +170,28 @@ export default function GoodsReceiptsTable() {
     }
   }, [confirm, queryClient, t])
 
+  const handleConfirm = React.useCallback(async (row: GoodsReceiptRow) => {
+    const acknowledged = await confirm({
+      title: t('pz.goodsReceipts.table.confirm.confirm.title'),
+      description: t('pz.goodsReceipts.table.confirm.confirm.description', undefined, {
+        documentNumber: row.documentNumber,
+      }),
+      confirmText: t('pz.goodsReceipts.table.confirm.confirm.action'),
+    })
+    if (!acknowledged) return
+    try {
+      await confirmGoodsReceipt(row.id, row.updatedAt)
+      flash(t('pz.goodsReceipts.form.flash.confirmed'), 'success')
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEY] })
+    } catch (err) {
+      if (surfaceRecordConflict(err, t)) {
+        queryClient.invalidateQueries({ queryKey: [QUERY_KEY] })
+        return
+      }
+      flash(err instanceof Error && err.message ? err.message : t('pz.goodsReceipts.table.error.confirm'), 'error')
+    }
+  }, [confirm, queryClient, t])
+
 
   return (
     <>
@@ -198,25 +221,34 @@ export default function GoodsReceiptsTable() {
           // Only offer what the row can actually do: the edit route refuses a confirmed
           // document and a caller without the manage feature, so pointing at it anyway
           // would just be a door that closes in the user's face.
-          const editable = canManage && row.status === 'draft'
-          if (!editable) return null
-          return (
-            <RowActions
-              items={[
-                {
-                  id: 'pz.goodsReceipts.edit',
-                  label: t('pz.goodsReceipts.table.actions.edit'),
-                  href: editHref(row),
-                },
-                {
-                  id: 'pz.goodsReceipts.delete',
-                  label: t('pz.goodsReceipts.table.actions.delete'),
-                  destructive: true,
-                  onSelect: () => { void handleDelete(row) },
-                },
-              ]}
-            />
-          )
+          const isDraft = row.status === 'draft'
+          const items = []
+          if (canManage && isDraft) {
+            items.push(
+              {
+                id: 'pz.goodsReceipts.edit',
+                label: t('pz.goodsReceipts.table.actions.edit'),
+                href: editHref(row),
+              },
+              {
+                id: 'pz.goodsReceipts.delete',
+                label: t('pz.goodsReceipts.table.actions.delete'),
+                destructive: true,
+                onSelect: () => { void handleDelete(row) },
+              },
+            )
+          }
+          // Confirming is a separate grant from editing, so someone who may finalise a
+          // delivery without entering one still gets the action.
+          if (canConfirm && isDraft) {
+            items.push({
+              id: 'pz.goodsReceipts.confirm',
+              label: t('pz.goodsReceipts.table.actions.confirm'),
+              onSelect: () => { void handleConfirm(row) },
+            })
+          }
+          if (items.length === 0) return null
+          return <RowActions items={items} />
         }}
         pagination={{
           page,
