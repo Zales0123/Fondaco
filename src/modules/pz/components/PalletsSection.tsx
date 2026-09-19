@@ -19,7 +19,7 @@ type PalletRow = {
   updatedAt: string
 }
 
-type PalletsResponse = { items: PalletRow[]; totalCount: number }
+type PalletsResponse = { items: PalletRow[]; totalCount?: number; total?: number }
 const PAGE_SIZE = 50
 
 export function PalletsSection({ goodsReceiptId }: { goodsReceiptId: string }) {
@@ -33,6 +33,7 @@ export function PalletsSection({ goodsReceiptId }: { goodsReceiptId: string }) {
       `/api/pz/pallets?goodsReceiptId=${encodeURIComponent(goodsReceiptId)}&page=${page}&pageSize=${PAGE_SIZE}`,
     ),
   })
+  const total = data?.totalCount ?? data?.total ?? 0
   const columns = React.useMemo<ColumnDef<PalletRow>[]>(() => [
     { accessorKey: 'code', header: t('pz.goodsReceipts.view.pallets.column.code') },
     { accessorKey: 'label', header: t('pz.goodsReceipts.view.pallets.column.label'), cell: ({ row }) => row.original.label || '—' },
@@ -65,8 +66,8 @@ export function PalletsSection({ goodsReceiptId }: { goodsReceiptId: string }) {
             pagination={{
               page,
               pageSize: PAGE_SIZE,
-              total: data?.totalCount ?? 0,
-              totalPages: Math.ceil((data?.totalCount ?? 0) / PAGE_SIZE),
+              total,
+              totalPages: Math.ceil(total / PAGE_SIZE),
               onPageChange: setPage,
             }}
           />
