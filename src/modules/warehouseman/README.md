@@ -36,9 +36,23 @@ role-assignment guard refuses to grant a feature the granter does not hold, so w
 it no administrator could create a warehouseman at all. It also means an administrator
 can open the panel, which ADR-0003 states as the rule.
 
+## The demo fixture
+
+`mercato init` (without `--no-examples`) seeds a demo warehouseman, a demo warehouse
+`DEMO-WH` and the assignment between them, so a fresh environment can open the panel
+immediately. Setting `OM_SHOW_DEMO_CREDENTIALS=1` prints those credentials on the
+panel login page; it is refused outright when `NODE_ENV` is production, so it can
+only ever advertise a throwaway environment.
+
+Nothing is seeded in production unless an operator chooses the password explicitly
+through `OM_INIT_WAREHOUSEMAN_PASSWORD`. Re-running the seed never overwrites an
+assignment somebody made on purpose: only a freshly created demo account is given a
+warehouse.
+
 ## Assigning a warehouse
 
-Setup seeds no users, warehouses or assignments. For a tenant that already exists:
+Beyond the demo fixture, setup seeds no users, warehouses or assignments. For a
+tenant that already exists:
 
 1. Make sure the `warehouseman` role exists. It is created during tenant provisioning;
    an older tenant may predate this module, in which case create it in

@@ -4,8 +4,16 @@ import type { ModuleSetupConfig } from '@open-mercato/shared/modules/setup'
 import { ensureRoles } from '@open-mercato/core/modules/auth/lib/setup-app'
 import { Role, User, UserRole } from '@open-mercato/core/modules/auth/data/entities'
 import { computeEmailHash } from '@open-mercato/core/modules/auth/lib/emailHash'
+import { Warehouse } from '@open-mercato/core/modules/wms/data/entities'
+import { setCustomFieldsIfAny } from '@open-mercato/shared/lib/commands/helpers'
+import type { DataEngine } from '@open-mercato/shared/lib/data/engine'
+import { E } from '#generated/entities.ids.generated'
 import { createLogger } from '@open-mercato/shared/lib/logger'
 import { resolveSeedWarehouseman } from './lib/demoCredentials'
+import { ASSIGNED_WAREHOUSE_FIELD_KEY } from './lib/customFields'
+
+const DEMO_WAREHOUSE_CODE = 'DEMO-WH'
+const DEMO_WAREHOUSE_NAME = 'Magazyn Demonstracyjny'
 
 const logger = createLogger('warehouseman:setup')
 const BCRYPT_COST = 10
@@ -44,23 +52,78 @@ export const setup: ModuleSetupConfig = {
    * credentials resolver refuses to invent a well-known password in production — an
    * operator there has to choose one explicitly via OM_INIT_WAREHOUSEMAN_PASSWORD.
    */
-  async seedExamples({ em, tenantId, organizationId }) {
+  async seedExamples({ em, container, tenantId, organizationId }) {
     const credentials = resolveSeedWarehouseman()
     if (!credentials) {
       logger.info('Skipping the demo warehouseman: no password configured for this environment')
       return
     }
-    await ensureDemoWarehouseman(em, { tenantId, organizationId, ...credentials })
+
+    const scope = { tenantId, organizationId }
+    const userId = await ensureDemoWarehouseman(em, { ...scope, ...credentials })
+    if (!userId) return
+
+    const warehouseId = await ensureDemoWarehouse(em, scope)
+    if (!warehouseId) return
+
+    // Only a freshly seeded account is given a warehouse. Re-running the seed must
+    // never overwrite an assignment somebody made on purpose.
+    const dataEngine = container.resolve('dataEngine') as DataEngine
+    await setCustomFieldsIfAny({
+      dataEngine,
+      entityId: E.auth.user,
+      recordId: userId,
+      tenantId,
+      organizationId,
+      values: { [ASSIGNED_WAREHOUSE_FIELD_KEY]: warehouseId },
+    })
+    logger.info('Assigned the demo warehouse to the demo warehouseman', { warehouseId })
   },
+}
+
+/**
+ * The demo warehouse. `wms` is an optional peer: if it is not installed its table
+ * does not exist, and a demo account with no warehouse is a perfectly good panel
+ * demo, so the failure is logged and swallowed rather than breaking `mercato init`.
+ */
+async function ensureDemoWarehouse(
+  em: EntityManager,
+  scope: { tenantId: string; organizationId: string },
+): Promise<string | null> {
+  try {
+    const existing = await em.findOne(Warehouse, {
+      code: DEMO_WAREHOUSE_CODE,
+      tenantId: scope.tenantId,
+      organizationId: scope.organizationId,
+      deletedAt: null,
+    })
+    if (existing) return String(existing.id)
+
+    const warehouse = em.create(Warehouse, {
+      name: DEMO_WAREHOUSE_NAME,
+      code: DEMO_WAREHOUSE_CODE,
+      isActive: true,
+      tenantId: scope.tenantId,
+      organizationId: scope.organizationId,
+    } as unknown as Warehouse)
+    em.persist(warehouse)
+    await em.flush()
+    logger.info('Seeded the demo warehouse', { code: DEMO_WAREHOUSE_CODE })
+    return String(warehouse.id)
+  } catch (error) {
+    logger.warn('Skipping the demo warehouse: the wms module is unavailable', { err: error })
+    return null
+  }
 }
 
 async function ensureDemoWarehouseman(
   em: EntityManager,
   input: { tenantId: string; organizationId: string; email: string; password: string },
-): Promise<void> {
+): Promise<string | null> {
   const emailHash = computeEmailHash(input.email)
   const existing = await em.findOne(User, { emailHash, tenantId: input.tenantId, deletedAt: null })
-  if (existing) return
+  // Already seeded: leave the account, and its assignment, exactly as it is.
+  if (existing) return null
 
   const role = await em.findOne(Role, { name: WAREHOUSEMAN_ROLE, tenantId: input.tenantId, deletedAt: null })
   if (!role) {
@@ -68,7 +131,7 @@ async function ensureDemoWarehouseman(
     // the module. Seeding a warehouseman who cannot enter the panel would be worse
     // than seeding nobody.
     logger.warn('Skipping the demo warehouseman: the warehouseman role does not exist yet')
-    return
+    return null
   }
 
   const user = em.create(User, {
@@ -84,6 +147,7 @@ async function ensureDemoWarehouseman(
   em.persist(em.create(UserRole, { user, role, createdAt: new Date() } as unknown as UserRole))
   await em.flush()
   logger.info('Seeded the demo warehouseman', { email: input.email })
+  return String(user.id)
 }
 
 export default setup

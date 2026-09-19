@@ -9,6 +9,9 @@ import { expect, test, type APIRequestContext } from '@playwright/test'
  */
 
 const ADMIN = { email: 'admin@acme.com', password: 'secret' }
+// Seeded by the module's own seedExamples hook during `mercato init`.
+const DEMO = { email: 'warehouseman@acme.com', password: 'Warehouse123!' }
+const DEMO_WAREHOUSE_NAME = 'Magazyn Demonstracyjny'
 const EMPLOYEE = { email: 'employee@acme.com', password: 'secret' }
 const WAREHOUSEMAN_PASSWORD = 'Warehouse123!'
 const ASSIGNED_NAME = 'Assigned Warehouseman'
@@ -156,6 +159,32 @@ test.describe('TC-WHM-001 warehouseman panel access', () => {
     await signIn(page, unassignedEmail)
     await expect(page.getByRole('heading', { name: PANEL_TITLE_EMPTY })).toBeVisible()
     await expect(page.getByRole('link', { name: /Przyjęcie towaru|Goods receipt/ })).toBeVisible()
+  })
+
+  test('the seeded demo warehouseman opens the panel on its seeded warehouse', async ({ page, playwright }) => {
+    // The fixture is a non-production convenience: the resolver refuses to invent a
+    // well-known password when NODE_ENV is production, and this harness runs the app
+    // in production mode. Where it is not seeded there is nothing to assert.
+    const admin = await playwright.request.newContext({
+      baseURL: process.env.BASE_URL || 'http://localhost:3000',
+    })
+    let seeded = false
+    try {
+      const token = await login(admin, ADMIN.email, ADMIN.password)
+      const response = await admin.get('/api/auth/users?pageSize=100', { headers: bearer(token) })
+      const body = (await response.json()) as { items?: Array<{ email?: string }> }
+      seeded = (body.items ?? []).some((user) => user.email === DEMO.email)
+    } finally {
+      await admin.dispose()
+    }
+    test.skip(!seeded, 'the demo warehouseman is not seeded in this environment')
+
+    await page.goto('/warehouseman/login')
+    await page.getByLabel(EMAIL_FIELD).fill(DEMO.email)
+    await page.getByLabel(PASSWORD_FIELD).fill(DEMO.password)
+    await page.getByRole('button', { name: SIGN_IN }).click()
+    await expect(page).toHaveURL(/\/warehouseman$/)
+    await expect(page.getByRole('heading', { name: DEMO_WAREHOUSE_NAME })).toBeVisible()
   })
 
   test('a wrong password leaves the error on the login page', async ({ page }) => {
