@@ -64,8 +64,8 @@ export type GoodsReceiptUomSnapshot = {
 /**
  * Document Numbers are typed by hand, so uniqueness is a data rule rather than a
  * generator invariant. The index is per `(tenant, organization)` so one Organization's
- * numbering series never collides with another's, is `lower(...)` so `PZ/1/2026` and
- * `pz/1/2026` are the same document, and is partial on `deleted_at is null` so deleting
+ * numbering series never collides with another's, is `lower(...)` so `ZPZ/1/2026` and
+ * `zpz/1/2026` are the same document, and is partial on `deleted_at is null` so deleting
  * a Draft frees its number for reuse (ADR-0006).
  */
 @Index({

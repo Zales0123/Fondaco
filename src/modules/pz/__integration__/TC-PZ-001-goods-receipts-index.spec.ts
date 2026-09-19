@@ -18,9 +18,9 @@ const INDEX_PATH = '/backend/wms/goods-receipts'
 
 // The environment may serve Polish or English; match either rather than pinning the
 // assertion to whichever locale the run happens to resolve.
-const PAGE_TITLE = /Przyjęcia zewnętrzne|Goods Receipts/
-const EMPTY_TITLE = /Brak przyjęć zewnętrznych|No goods receipts yet/
-const LOAD_ERROR = /Nie udało się wczytać przyjęć zewnętrznych|Could not load goods receipts/
+const PAGE_TITLE = /Zlecenia przyjęć zewnętrznych|Goods Receipt Orders/
+const EMPTY_TITLE = /Brak zleceń przyjęć zewnętrznych|No goods receipt orders yet/
+const LOAD_ERROR = /Nie udało się wczytać zleceń przyjęć zewnętrznych|Could not load goods receipt orders/
 const COLUMN_HEADERS = [
   /Numer dokumentu|Document Number/,
   /Data dokumentu|Document Date/,

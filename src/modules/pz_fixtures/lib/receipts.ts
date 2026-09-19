@@ -5,9 +5,9 @@
  * indistinguishable from a real one in a series users reconcile against paper. These
  * fixtures keep that property by never entering the real series at all: every document
  * number carries this prefix, so a demo receipt is recognisable at a glance and in a
- * `like` query, and `PZ-2026-0001` stays free for the office to type.
+ * `like` query, and `ZPZ-2026-0001` stays free for the office to type.
  */
-export const FIXTURE_DOCUMENT_PREFIX = 'PZ-DEMO-'
+export const FIXTURE_DOCUMENT_PREFIX = 'ZPZ-DEMO-'
 
 export type FixtureLine = {
   catalogProductId: string

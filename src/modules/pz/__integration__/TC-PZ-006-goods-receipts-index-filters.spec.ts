@@ -207,7 +207,7 @@ test.describe('TC-PZ-006 goods receipts index filters, search and sort', () => {
     const emptyResults = page.locator('[data-testid="filtered-empty-results"]')
     await expect(emptyResults).toBeVisible({ timeout: 30_000 })
     await expect(emptyResults.getByRole('button', { name: /Clear search and filters|Wyczyść/i })).toBeVisible()
-    await expect(emptyResults.getByText(/No goods receipts yet|Brak przyjęć zewnętrznych/i)).toHaveCount(0)
+    await expect(emptyResults.getByText(/No goods receipt orders yet|Brak zleceń przyjęć zewnętrznych/i)).toHaveCount(0)
 
     // Clearing hands the full index back.
     await emptyResults.getByRole('button', { name: /Clear search and filters|Wyczyść/i }).click()
