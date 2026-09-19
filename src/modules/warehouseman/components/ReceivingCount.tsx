@@ -2,11 +2,16 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { ScanLine } from 'lucide-react'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Input } from '@open-mercato/ui/primitives/input'
 import { ComboboxInput } from '@open-mercato/ui/backend/inputs/ComboboxInput'
 import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import {
+  BarcodeScannerDialog,
+  type ScannerLogEntry,
+} from '@/modules/barcode_scanner/components/BarcodeScannerDialog'
 import { PanelLinkButton, ScreenEmpty, ScreenError, ScreenMessage, ScreenWarning } from './ReceivingStates'
 import {
   closePallet,
@@ -33,9 +38,16 @@ import {
   productLabel,
   receivingReceiptHref,
   receivingSummaryHref,
+  resolveCountQuantity,
   type PalletLabelNotice,
 } from '../lib/receivingPanel'
 import { takePalletLabelNotice } from '../lib/palletLabelNotice'
+
+/**
+ * How much of the scan history the screen keeps. The dialog shows only the last few, and a
+ * pallet counted for an hour would otherwise grow this array for as long as the screen lives.
+ */
+const SCAN_LOG_LIMIT = 10
 
 export type ReceivingCountProps = { receiptId: string; palletId: string }
 
@@ -44,6 +56,10 @@ export type ReceivingCountProps = { receiptId: string; palletId: string }
  * with Enter, so the form submits on Enter and the barcode field takes focus back after
  * every submit — including a failed one, because the next thing that happens on the floor
  * is another scan.
+ *
+ * The phone camera is the same count by another route: it reads a barcode where a wedge
+ * scanner would have typed one, and both meet in `countByBarcode`. Typing keeps working
+ * regardless — over plain http a phone has no secure context and therefore no camera at all.
  */
 export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
   const t = useT()
@@ -65,6 +81,16 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
   // opened after another, and a label warning must never be read against the wrong pallet.
   const [labelNotice, setLabelNotice] = React.useState<(PalletLabelNotice & { palletId: string }) | null>(null)
   const [printing, setPrinting] = React.useState(false)
+  const [scannerOpen, setScannerOpen] = React.useState(false)
+  const [scanStatus, setScanStatus] = React.useState<string | null>(null)
+  const [scanLog, setScanLog] = React.useState<ScannerLogEntry[]>([])
+  // The camera fires `onDetected` on every frame it decodes, so the guard has to be read
+  // synchronously — a state flag would let a second count start inside the same tick.
+  const countInFlight = React.useRef(false)
+  // Read inside async handlers, which is why the open state is mirrored here rather than
+  // closed over: by the time a count settles the rendered value may be a tick behind.
+  const scannerOpenRef = React.useRef(false)
+  const logSequence = React.useRef(0)
 
   // Creating a pallet prints its label and then opens the pallet, so the outcome of that
   // print is waiting here. Reading it consumes it: coming back to this pallet later must
@@ -91,6 +117,40 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
   const closed = pallet?.status === 'closed'
 
   const focusBarcode = React.useCallback(() => barcodeRef.current?.focus(), [])
+  /**
+   * While the camera holds the screen the dialog owns focus, and pulling it back would fight
+   * the modal's own focus trap. Every other path ends on the barcode field, because the next
+   * thing that happens on the floor is another scan.
+   */
+  const focusBarcodeUnlessScanning = React.useCallback(() => {
+    if (scannerOpenRef.current) return
+    focusBarcode()
+  }, [focusBarcode])
+
+  const closeScanner = React.useCallback(() => {
+    scannerOpenRef.current = false
+    setScannerOpen(false)
+    setScanStatus(null)
+    // The dialog hands focus back to whatever opened it, so the barcode field is claimed once
+    // that has happened — a wedge scanner types into it and the floor keeps counting.
+    window.setTimeout(focusBarcode, 0)
+  }, [focusBarcode])
+
+  // A closed pallet takes no counts, so the camera is dismissed with every other mutating
+  // control rather than staying up over a screen that can only refuse it.
+  React.useEffect(() => {
+    if (closed && scannerOpenRef.current) closeScanner()
+  }, [closed, closeScanner])
+
+  /**
+   * Newest first and bounded. Each entry carries a stable id so the dialog can key its list
+   * without re-mounting rows the operator is reading.
+   */
+  const pushScanLog = React.useCallback((tone: ScannerLogEntry['tone'], label: string) => {
+    logSequence.current += 1
+    const entry: ScannerLogEntry = { id: `scan-${logSequence.current}`, label, tone }
+    setScanLog((previous) => [entry, ...previous].slice(0, SCAN_LOG_LIMIT))
+  }, [])
   // The field only exists once the pallet has loaded and is open, so the autofocus waits
   // for that rather than firing against a loading screen and never coming back.
   const countable = !!pallet && !closed
@@ -101,10 +161,19 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
   const invalidatePallets = () =>
     queryClient.invalidateQueries({ queryKey: ['warehouseman.receiving.pallets', receiptId] })
 
+  /**
+   * Records one count, whichever input named the product. The quantity field is a multiplier
+   * rather than an entry the floor owes us: left blank a scan counts one unit, which is what
+   * `resolveCountQuantity` says, and a typed multiplier is still refused when it is not a
+   * quantity.
+   */
   async function recordCount(catalogVariantId: string, resolvedName: string | null) {
-    const parsed = parseCountQuantity(quantity)
+    const parsed = resolveCountQuantity(quantity)
     if (!parsed) {
-      setFormError(t('pz.palletLines.errors.quantityInvalid'))
+      const message = t('pz.palletLines.errors.quantityInvalid')
+      setFormError(message)
+      pushScanLog('error', message)
+      setScanStatus(null)
       return
     }
     setSubmitting(true)
@@ -112,53 +181,110 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
       const counted = await countPalletLine({ palletId, catalogVariantId, quantity: parsed })
       const refreshed = await lines.refetch()
       const row = refreshed.data?.find((candidate) => candidate.catalogVariantId === catalogVariantId)
+      const product = productLabel(row?.name ?? resolvedName, unknownProduct)
+      const total = formatCountQuantity(row?.quantity ?? counted.quantity)
       setAnnouncement(
-        t('warehouseman.receiving.count.added', undefined, {
-          product: productLabel(row?.name ?? resolvedName, unknownProduct),
-          quantity: formatCountQuantity(row?.quantity ?? counted.quantity),
+        t('warehouseman.receiving.count.added', undefined, { product, quantity: total }),
+      )
+      // The running total, not only what this scan added: counting onto a pallet is a tally,
+      // and the number the operator checks against the goods in front of them is the total.
+      pushScanLog(
+        'success',
+        t('warehouseman.receiving.count.scanner.logAdded', undefined, {
+          product,
+          added: formatCountQuantity(parsed),
+          total,
         }),
       )
       setBarcode('')
+      // The multiplier never survives a count. A quantity left over from the last product
+      // would silently multiply the next scan, and nobody would see it happen.
       setQuantity('')
       setUnknownBarcode(null)
       setFormError(null)
+      setScanStatus(null)
       await invalidatePallets()
     } catch (error) {
-      setFormError(messageOf(error, t('pz.palletLines.errors.countFailed')))
+      // The server's refusal is already localized, so it is what the log and the screen say.
+      const message = messageOf(error, t('pz.palletLines.errors.countFailed'))
+      setFormError(message)
+      pushScanLog('error', message)
+      setScanStatus(null)
     } finally {
       setSubmitting(false)
-      focusBarcode()
+      focusBarcodeUnlessScanning()
+    }
+  }
+
+  /**
+   * The screen's only counting-by-barcode path. A typed code and a code the camera read meet
+   * here, so the camera can never record something the keyboard would have refused — nor be
+   * refused on different terms.
+   */
+  async function countByBarcode(scanned: string): Promise<void> {
+    const code = normalizeScannedCode(scanned)
+    if (!code) {
+      setFormError(t('pz.palletLines.errors.barcodeRequired'))
+      focusBarcodeUnlessScanning()
+      return
+    }
+    if (countInFlight.current) return
+    countInFlight.current = true
+    setFormError(null)
+    setSubmitting(true)
+    setScanStatus(t('warehouseman.receiving.count.scanner.looking', undefined, { code }))
+    try {
+      const variant = await resolveVariantByBarcode(code)
+      await recordCount(variant.catalogVariantId, variant.name)
+    } catch (error) {
+      setScanStatus(null)
+      if (error instanceof ReceivingApiError && error.status === 404) {
+        // The scanned code stays in the field: it is the only record of what is in the
+        // person's hand, and the picker is how they say which product carries it.
+        setBarcode(code)
+        setUnknownBarcode(code)
+        const message = t('warehouseman.receiving.count.unknownBarcode', undefined, { barcode: code })
+        setFormError(message)
+        pushScanLog('error', message)
+        // The camera cannot help with this recovery — the answer is in the catalog picker
+        // below, which the operator has to read and tap. Leaving the camera running over a
+        // screen they must act on is worse than closing it, so the dialog goes.
+        closeScanner()
+      } else {
+        const message = messageOf(error, t('pz.palletLines.errors.countFailed'))
+        setFormError(message)
+        pushScanLog('error', message)
+        focusBarcodeUnlessScanning()
+      }
+    } finally {
+      countInFlight.current = false
+      setSubmitting(false)
     }
   }
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    await countByBarcode(barcode)
+  }
+
+  function onDetected(raw: string) {
+    void countByBarcode(raw)
+  }
+
+  function openScanner() {
     setFormError(null)
-    const scanned = normalizeScannedCode(barcode)
-    if (!scanned) {
-      setFormError(t('pz.palletLines.errors.barcodeRequired'))
-      focusBarcode()
-      return
-    }
-    try {
-      const variant = await resolveVariantByBarcode(scanned)
-      await recordCount(variant.catalogVariantId, variant.name)
-    } catch (error) {
-      if (error instanceof ReceivingApiError && error.status === 404) {
-        // The scanned code stays in the field: it is the only record of what is in the
-        // person's hand, and the picker is how they say which product carries it.
-        setUnknownBarcode(scanned)
-        setFormError(t('warehouseman.receiving.count.unknownBarcode', undefined, { barcode: scanned }))
-      } else {
-        setFormError(messageOf(error, t('pz.palletLines.errors.countFailed')))
-      }
-      focusBarcode()
-    }
+    setScanStatus(null)
+    // The log is deliberately not cleared: reopening the camera after fixing an unknown
+    // barcode should still show what was counted a minute ago.
+    scannerOpenRef.current = true
+    setScannerOpen(true)
   }
 
   async function onSaveEdit(line: PalletLine) {
     if (!editing) return
     setRowError(null)
+    // A correction replaces the stored total, so blank is not "one more" here — it is somebody
+    // who has not said what the quantity should be. This stays the strict parser.
     const parsed = parseCountQuantity(editing.value)
     if (!parsed) {
       setRowError({ id: line.id, message: t('pz.palletLines.errors.quantityInvalid') })
@@ -341,19 +467,36 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
 
       <form className="flex flex-col gap-2" onSubmit={onSubmit}>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-          <label className="flex flex-1 flex-col gap-2">
-            <span className="text-lg">{t('warehouseman.receiving.count.barcode.label')}</span>
-            <Input
-              ref={barcodeRef}
-              value={barcode}
-              className="h-18"
-              inputClassName="h-full text-lg"
-              placeholder={t('warehouseman.receiving.count.barcode.placeholder')}
-              autoComplete="off"
+          <div className="flex flex-1 items-end gap-2">
+            <label className="flex flex-1 flex-col gap-2">
+              <span className="text-lg">{t('warehouseman.receiving.count.barcode.label')}</span>
+              <Input
+                ref={barcodeRef}
+                value={barcode}
+                className="h-18"
+                inputClassName="h-full text-lg"
+                placeholder={t('warehouseman.receiving.count.barcode.placeholder')}
+                autoComplete="off"
+                disabled={closed || submitting}
+                onChange={(event) => setBarcode(event.target.value)}
+              />
+            </label>
+            {/* Typing stays the path that always works: over plain http a phone has no secure
+                context and therefore no camera, so the camera is an addition, never a
+                replacement. */}
+            <Button
+              type="button"
+              size="lg"
+              variant="outline"
+              className="h-18 w-18 shrink-0"
+              aria-label={t('warehouseman.receiving.count.scanner.open')}
+              title={t('warehouseman.receiving.count.scanner.open')}
+              onClick={openScanner}
               disabled={closed || submitting}
-              onChange={(event) => setBarcode(event.target.value)}
-            />
-          </label>
+            >
+              <ScanLine className="size-6" aria-hidden="true" />
+            </Button>
+          </div>
           <label className="flex flex-col gap-2 sm:w-40">
             <span className="text-lg">{t('warehouseman.receiving.count.quantity.label')}</span>
             <Input
@@ -365,6 +508,9 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
               disabled={closed || submitting}
               onChange={(event) => setQuantity(event.target.value)}
             />
+            <span className="text-muted-foreground">
+              {t('warehouseman.receiving.count.quantity.hint')}
+            </span>
           </label>
         </div>
         <Button type="submit" size="lg" className="h-16 w-full text-lg" disabled={closed || submitting}>
@@ -372,7 +518,9 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
         </Button>
       </form>
 
-      {formError ? <ScreenError>{formError}</ScreenError> : null}
+      {/* The dialog prints the same refusal itself while it is up, so the screen behind it
+          does not repeat it. */}
+      {formError && !scannerOpen ? <ScreenError>{formError}</ScreenError> : null}
 
       {unknownBarcode ? (
         <label className="flex flex-col gap-2">
@@ -483,6 +631,23 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
       <PanelLinkButton href={receivingReceiptHref(receiptId)}>
         {t('warehouseman.receiving.count.backToPallets')}
       </PanelLinkButton>
+      {/* Counting is a run of scans, not one lookup, so the camera stays live between them and
+          the operator decides when it is done. `busy` suspends acceptance while a count is
+          posting rather than letting decoded frames queue up behind it. */}
+      <BarcodeScannerDialog
+        open={scannerOpen}
+        onClose={closeScanner}
+        onDetected={onDetected}
+        busy={submitting}
+        statusMessage={scanStatus}
+        errorMessage={formError}
+        continuous
+        log={scanLog}
+        title={t('warehouseman.receiving.count.scanner.title')}
+        description={t('warehouseman.receiving.count.scanner.description')}
+        manualLabel={t('warehouseman.receiving.count.scanner.manualLabel')}
+        manualPlaceholder={t('warehouseman.receiving.count.scanner.manualPlaceholder')}
+      />
       {ConfirmDialogElement}
     </div>
   )

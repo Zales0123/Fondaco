@@ -11,6 +11,7 @@ import {
   productLabel,
   receivingSummaryHref,
   resolveApiMessage,
+  resolveCountQuantity,
 } from '../receivingPanel'
 
 describe('receiving hrefs', () => {
@@ -79,6 +80,29 @@ describe('parseCountQuantity', () => {
 
   it('refuses more precision than the column carries', () => {
     expect(parseCountQuantity('1.00001')).toBeNull()
+  })
+})
+
+describe('resolveCountQuantity', () => {
+  it('reads a blank field as one unit, because the scan itself is the count', () => {
+    // The camera adds a unit per scan and the quantity field is only a multiplier, so an
+    // untouched field must not be the validation error `parseCountQuantity` makes of it.
+    expect(resolveCountQuantity('')).toBe('1.0000')
+    expect(resolveCountQuantity('   ')).toBe('1.0000')
+    expect(resolveCountQuantity('\t\n')).toBe('1.0000')
+  })
+
+  it('keeps a typed multiplier exactly as the quantity parser reads it', () => {
+    expect(resolveCountQuantity('1')).toBe('1.0000')
+    expect(resolveCountQuantity('12')).toBe('12.0000')
+    expect(resolveCountQuantity('2,5')).toBe('2.5000')
+  })
+
+  it('still refuses what is typed but is not a quantity', () => {
+    expect(resolveCountQuantity('0')).toBeNull()
+    expect(resolveCountQuantity('abc')).toBeNull()
+    expect(resolveCountQuantity('-3')).toBeNull()
+    expect(resolveCountQuantity('1.00001')).toBeNull()
   })
 })
 
