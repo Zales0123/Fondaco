@@ -1,7 +1,8 @@
 "use client"
-import Link from 'next/link'
-import { Button } from '@open-mercato/ui/primitives/button'
+import { Hammer } from 'lucide-react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { PanelCard } from './PanelUI'
+import { PanelLinkButton } from './ReceivingStates'
 import { PANEL_HOME_PATH } from './PanelLoginForm'
 
 /**
@@ -13,11 +14,12 @@ export function StubAction({ titleKey }: { titleKey: string }) {
   const t = useT()
   return (
     <div className="flex flex-col gap-4">
-      <h2 className="text-xl font-semibold">{t(titleKey)}</h2>
-      <p>{t('warehouseman.stub.notImplemented')}</p>
-      <Button asChild size="lg" variant="outline" className="h-16 text-lg">
-        <Link href={PANEL_HOME_PATH}>{t('warehouseman.stub.back')}</Link>
-      </Button>
+      <PanelCard className="flex flex-col items-center gap-3 border-dashed py-10 text-center">
+        <Hammer className="size-10 text-muted-foreground" aria-hidden="true" />
+        <p className="text-xl font-bold">{t(titleKey)}</p>
+        <p className="text-lg text-muted-foreground">{t('warehouseman.stub.notImplemented')}</p>
+      </PanelCard>
+      <PanelLinkButton href={PANEL_HOME_PATH}>{t('warehouseman.stub.back')}</PanelLinkButton>
     </div>
   )
 }

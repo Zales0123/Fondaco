@@ -80,10 +80,10 @@ export function ScanQuantityStep({
   const effective = typing !== null ? resolveTyped(typing, quantity) : quantity
 
   return (
-    <div className="flex flex-col gap-4">
+    <div data-om-panel="warehouseman" className="flex flex-col gap-4 text-foreground">
       <div className="flex flex-col gap-1">
-        <span className="text-xl font-semibold">{productName}</span>
-        <span className="text-muted-foreground">{code}</span>
+        <span className="text-2xl font-bold">{productName}</span>
+        <span className="font-mono text-base text-muted-foreground">{code}</span>
       </div>
 
       {/* A refused count leaves the step up rather than throwing the operator back to the
@@ -98,7 +98,7 @@ export function ScanQuantityStep({
         <Button
           type="button"
           variant="outline"
-          className="h-20 w-20 shrink-0 text-lg"
+          className="h-20 w-20 shrink-0 border-2 text-lg font-bold"
           disabled={busy || quantity <= MIN_SCAN_QUANTITY}
           aria-label={t('warehouseman.receiving.count.step.decreaseBy', undefined, { step: COARSE_STEP })}
           onClick={() => step(-COARSE_STEP)}
@@ -108,7 +108,7 @@ export function ScanQuantityStep({
         <Button
           type="button"
           variant="outline"
-          className="h-20 w-20 shrink-0"
+          className="h-20 w-20 shrink-0 border-2"
           disabled={busy || quantity <= MIN_SCAN_QUANTITY}
           aria-label={t('warehouseman.receiving.count.step.decrease')}
           onClick={() => step(-1)}
@@ -121,8 +121,8 @@ export function ScanQuantityStep({
           value={shown}
           inputMode="numeric"
           disabled={busy}
-          className="h-20 flex-1"
-          inputClassName="h-full text-center text-3xl font-semibold"
+          className="h-20 min-w-0 flex-1 border-2"
+          inputClassName="h-full text-center text-3xl font-bold"
           aria-label={t('warehouseman.receiving.count.step.quantityLabel')}
           aria-live="polite"
           onChange={(event) => setTyping(event.target.value)}
@@ -131,7 +131,7 @@ export function ScanQuantityStep({
         <Button
           type="button"
           variant="outline"
-          className="h-20 w-20 shrink-0"
+          className="h-20 w-20 shrink-0 border-2"
           disabled={busy}
           aria-label={t('warehouseman.receiving.count.step.increase')}
           onClick={() => step(1)}
@@ -141,7 +141,7 @@ export function ScanQuantityStep({
         <Button
           type="button"
           variant="outline"
-          className="h-20 w-20 shrink-0 text-lg"
+          className="h-20 w-20 shrink-0 border-2 text-lg font-bold"
           disabled={busy}
           aria-label={t('warehouseman.receiving.count.step.increaseBy', undefined, { step: COARSE_STEP })}
           onClick={() => step(COARSE_STEP)}
@@ -153,8 +153,7 @@ export function ScanQuantityStep({
       <Button
         ref={confirmRef}
         type="button"
-        size="lg"
-        className="h-20 w-full text-xl"
+        className="h-20 w-full border-2 text-xl font-bold"
         disabled={busy}
         onClick={() => onConfirm(effective)}
       >
@@ -163,9 +162,8 @@ export function ScanQuantityStep({
       </Button>
       <Button
         type="button"
-        size="lg"
         variant="outline"
-        className="h-16 w-full text-lg"
+        className="h-16 w-full border-2 text-lg font-semibold"
         disabled={busy}
         onClick={onCancel}
       >

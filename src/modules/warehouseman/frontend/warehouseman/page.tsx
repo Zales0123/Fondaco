@@ -6,7 +6,7 @@ export default async function WarehousemanPanelPage() {
   const { userLabel, warehouse } = await loadPanelContext()
   return (
     <PanelShell userLabel={userLabel} warehouseName={warehouse?.name ?? null}>
-      <PanelHome />
+      <PanelHome assignedWarehouseId={warehouse?.id ?? null} />
     </PanelShell>
   )
 }

@@ -3,13 +3,15 @@ import * as React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ScanLine } from 'lucide-react'
+import { Check, ChevronRight, ListChecks, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@open-mercato/ui/primitives/button'
-import { Input } from '@open-mercato/ui/primitives/input'
+import { IconButton } from '@open-mercato/ui/primitives/icon-button'
 import { StatusBadge, type StatusBadgeVariant } from '@open-mercato/ui/primitives/status-badge'
 import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
+import { cn } from '@open-mercato/shared/lib/utils'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { BarcodeScannerDialog } from '@/modules/barcode_scanner/components/BarcodeScannerDialog'
+import { PANEL_PRIMARY, PanelFooter, ScanField, SectionLabel } from './PanelUI'
 import { PanelLinkButton, ScreenEmpty, ScreenError, ScreenMessage } from './ReceivingStates'
 import {
   createPallet,
@@ -141,8 +143,7 @@ export function ReceivingPallets({ receiptId }: ReceivingPalletsProps) {
     [receiptId, router, t],
   )
 
-  async function onScan(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
+  async function onScan() {
     setScanError(null)
     const scanned = normalizeScannedCode(code)
     if (!scanned) {
@@ -194,68 +195,40 @@ export function ReceivingPallets({ receiptId }: ReceivingPalletsProps) {
   const documentNumber = document.data?.documentNumber ?? ''
   const rows = pallets.data ?? []
   return (
-    <div className="flex flex-col gap-4">
-      <h2 className="text-xl font-semibold">
-        {t('warehouseman.receiving.pallets.title', undefined, { documentNumber })}
-      </h2>
-
-      <Button
-        type="button"
-        size="lg"
-        className="h-16 w-full text-lg"
-        onClick={() => create.mutate()}
-        disabled={create.isPending}
-      >
-        {create.isPending
-          ? t('warehouseman.receiving.pallets.creating')
-          : t('warehouseman.receiving.pallets.create')}
-      </Button>
+    <div className="flex flex-1 flex-col gap-4">
+      <p className="text-lg">
+        <span className="font-bold">{documentNumber}</span>
+        {document.data?.supplierName ? (
+          <span className="text-muted-foreground">
+            {' · '}
+            {t('warehouseman.receiving.list.supplier', undefined, { supplier: document.data.supplierName })}
+          </span>
+        ) : null}
+      </p>
 
       {/* Typing stays the path that always works: over plain http a phone has no secure
           context and therefore no camera at all, so the camera is an addition, never a
           replacement. */}
-      <form className="flex flex-col gap-2" onSubmit={onScan}>
-        <div className="flex items-end gap-2">
-          <label className="flex flex-1 flex-col gap-2">
-            <span className="text-lg">{t('warehouseman.receiving.pallets.scan.label')}</span>
-            <Input
-              value={code}
-              className="h-18"
-              inputClassName="h-full text-lg"
-              placeholder={t('warehouseman.receiving.pallets.scan.placeholder')}
-              autoComplete="off"
-              disabled={scanning}
-              onChange={(event) => setCode(event.target.value)}
-            />
-          </label>
-          <Button
-            type="button"
-            size="lg"
-            variant="outline"
-            className="h-18 w-18 shrink-0"
-            aria-label={t('warehouseman.receiving.pallets.scanner.open')}
-            title={t('warehouseman.receiving.pallets.scanner.open')}
-            onClick={onOpenScanner}
-            disabled={scanning}
-          >
-            <ScanLine className="size-6" aria-hidden="true" />
-          </Button>
-        </div>
-        <Button
-          type="submit"
-          size="lg"
-          variant="outline"
-          className="h-16 w-full text-lg"
-          disabled={scanning}
-        >
-          {scanning
+      <ScanField
+        label={t('warehouseman.receiving.pallets.scan.label')}
+        placeholder={t('warehouseman.receiving.pallets.scan.placeholder')}
+        value={code}
+        onChange={setCode}
+        onSubmit={onScan}
+        submitLabel={
+          scanning
             ? t('warehouseman.receiving.pallets.scan.submitting')
-            : t('warehouseman.receiving.pallets.scan.submit')}
-        </Button>
-      </form>
+            : t('warehouseman.receiving.pallets.scan.submit')
+        }
+        onCamera={onOpenScanner}
+        cameraLabel={t('warehouseman.receiving.pallets.scanner.open')}
+        disabled={scanning}
+      />
 
       {scanError && !scannerOpen ? <ScreenError>{scanError}</ScreenError> : null}
       {actionError ? <ScreenError>{actionError}</ScreenError> : null}
+
+      <SectionLabel>{t('warehouseman.receiving.pallets.onDocument')}</SectionLabel>
 
       {rows.length === 0 ? (
         <ScreenEmpty
@@ -263,45 +236,73 @@ export function ReceivingPallets({ receiptId }: ReceivingPalletsProps) {
           description={t('warehouseman.receiving.pallets.empty.description')}
         />
       ) : (
-        <ul className="flex flex-col gap-4">
+        <ul className="flex flex-col gap-3 md:grid md:grid-cols-2">
           {rows.map((pallet) => (
-            <li key={pallet.id} className="flex flex-col gap-2 rounded-md border border-border p-4">
+            <li key={pallet.id} className="flex items-center gap-3 rounded-lg border-2 border-border bg-card p-3">
               <Link
                 href={receivingPalletHref(receiptId, pallet.id)}
-                className="flex min-h-16 flex-col gap-1 text-lg focus-visible:outline-none focus-visible:shadow-focus"
+                className="flex min-w-0 flex-1 items-center gap-3 focus-visible:outline-none focus-visible:shadow-focus"
               >
-                <span className="font-semibold">{pallet.code}</span>
-                {pallet.label ? <span className="text-muted-foreground">{pallet.label}</span> : null}
-                <span className="text-muted-foreground">
-                  {t('warehouseman.receiving.pallets.lineCount', undefined, { count: pallet.lineCount })}
+                <span
+                  className={cn(
+                    'flex size-14 shrink-0 items-center justify-center rounded-lg border-2',
+                    pallet.status === 'closed'
+                      ? 'border-status-success-border bg-status-success-bg text-status-success-text'
+                      : 'border-border bg-accent text-accent-foreground',
+                  )}
+                  aria-hidden="true"
+                >
+                  {pallet.status === 'closed' ? <Check className="size-7" /> : <ListChecks className="size-7" />}
                 </span>
-                <StatusBadge variant={PALLET_STATUS_VARIANTS[pallet.status]} dot>
-                  {t(`pz.pallets.status.${pallet.status}`)}
-                </StatusBadge>
+                <span className="flex min-w-0 flex-1 flex-col gap-1">
+                  <span className="truncate font-mono text-xl font-semibold">{pallet.code}</span>
+                  {pallet.label ? (
+                    <span className="truncate text-base text-muted-foreground">{pallet.label}</span>
+                  ) : null}
+                  <span className="flex items-center gap-2">
+                    <StatusBadge variant={PALLET_STATUS_VARIANTS[pallet.status]} dot>
+                      {t(`pz.pallets.status.${pallet.status}`)}
+                    </StatusBadge>
+                    <span className="text-base text-muted-foreground">
+                      {t('warehouseman.receiving.pallets.lineCount', undefined, { count: pallet.lineCount })}
+                    </span>
+                  </span>
+                </span>
+                <ChevronRight className="size-7 shrink-0" aria-hidden="true" />
               </Link>
               {pallet.status === 'open' && pallet.lineCount === 0 ? (
-                <Button
+                <IconButton
                   type="button"
-                  size="lg"
                   variant="outline"
-                  className="h-16 w-full text-lg"
-                  onClick={() => onDelete(pallet)}
+                  className="size-14 shrink-0 border-2 text-destructive"
+                  aria-label={t('warehouseman.receiving.pallets.delete', undefined, { code: pallet.code })}
                   disabled={remove.isPending}
+                  onClick={() => onDelete(pallet)}
                 >
-                  {t('warehouseman.receiving.pallets.delete', undefined, { code: pallet.code })}
-                </Button>
+                  <Trash2 className="size-6" aria-hidden="true" />
+                </IconButton>
               ) : null}
             </li>
           ))}
         </ul>
       )}
 
-      <PanelLinkButton href={receivingSummaryHref(receiptId)}>
-        {t('warehouseman.receiving.count.summary')}
-      </PanelLinkButton>
-      <PanelLinkButton href={RECEIVING_LIST_HREF}>
-        {t('warehouseman.receiving.pallets.backToList')}
-      </PanelLinkButton>
+      <PanelFooter>
+        <Button
+          type="button"
+          className={PANEL_PRIMARY}
+          onClick={() => create.mutate()}
+          disabled={create.isPending}
+        >
+          <Plus aria-hidden="true" className="size-7" />
+          {create.isPending
+            ? t('warehouseman.receiving.pallets.creating')
+            : t('warehouseman.receiving.pallets.create')}
+        </Button>
+        <PanelLinkButton href={receivingSummaryHref(receiptId)}>
+          {t('warehouseman.receiving.count.summary')}
+        </PanelLinkButton>
+      </PanelFooter>
       <BarcodeScannerDialog
         open={scannerOpen}
         onClose={() => setScannerOpen(false)}

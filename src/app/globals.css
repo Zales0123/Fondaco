@@ -1146,3 +1146,69 @@ body[data-demo-feedback-fab="visible"] main {
 .om-mdx-editor .cm-dropCursor {
   border-left-color: var(--foreground);
 }
+
+/* ── Warehouseman panel theme ─────────────────────────────────────────────────
+   The panel is worked on a handheld or a cart tablet, in gloves, under warehouse
+   lighting. It re-points the semantic tokens for its own subtree rather than
+   hard-coding colours in its components: heavier ink borders, a warm paper
+   ground, and an orange primary that survives daylight through a dock door. The
+   office backend keeps the shared theme untouched, and the scope wins over
+   `.dark` on <html> because it sits closer to the panel's elements. */
+[data-om-panel='warehouseman'] {
+  color-scheme: light;
+  --radius: 0.75rem;
+
+  --background: #f2f1ec;
+  --foreground: #14140f;
+  --card: #ffffff;
+  --card-foreground: #14140f;
+  --popover: #ffffff;
+  --popover-foreground: #14140f;
+
+  --primary: #c4450a;
+  --primary-foreground: #ffffff;
+  --primary-hover: #8f3207;
+
+  --secondary: #ffffff;
+  --secondary-foreground: #14140f;
+  --muted: #e7e5dc;
+  --muted-foreground: #46453e; /* 7.4:1 on the paper ground, unlike the office grey */
+  --accent: #fbeadf;
+  --accent-foreground: #8f3207;
+
+  --border: #14140f;
+  --input: #14140f;
+  --ring: #c4450a;
+  --destructive: #b3261e;
+  --destructive-foreground: #ffffff;
+
+  --status-success-bg: #e3f2e8;
+  --status-success-text: #0f6b34;
+  --status-success-border: #0f6b34;
+  --status-success-icon: #0f6b34;
+  --status-success-solid: #0f6b34;
+
+  --status-error-bg: #fbe7e5;
+  --status-error-text: #b3261e;
+  --status-error-border: #b3261e;
+  --status-error-icon: #b3261e;
+  --status-error-solid: #b3261e;
+
+  --status-warning-bg: #fbf0d9;
+  --status-warning-text: #7a4f00;
+  --status-warning-border: #7a4f00;
+  --status-warning-icon: #7a4f00;
+  --status-warning-solid: #7a4f00;
+
+  --status-info-bg: #e6edf9;
+  --status-info-text: #1b4fa8;
+  --status-info-border: #1b4fa8;
+  --status-info-icon: #1b4fa8;
+  --status-info-solid: #1b4fa8;
+
+  --status-neutral-bg: #ffffff;
+  --status-neutral-text: #46453e;
+  --status-neutral-border: #14140f;
+  --status-neutral-icon: #46453e;
+  --status-neutral-solid: #46453e;
+}

@@ -133,7 +133,7 @@ function SummaryRow({
           {withUnit(formatQuantity(row.counted), row.unit)}
         </StackedCell>
         <StackedCell label={t('pz.receiving.summary.column.difference')}>
-          <span className="flex flex-wrap items-center gap-2">
+          <span className="flex w-full flex-wrap items-center gap-2">
             <DifferenceBadge row={row} />
             <button
               type="button"
@@ -141,7 +141,7 @@ function SummaryRow({
               aria-expanded={expanded}
               aria-controls={breakdownId}
               // 44px minimum target: this is tapped with gloves on a handheld.
-              className="inline-flex h-11 w-11 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="ml-auto inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <span className="sr-only">
                 {t(expanded ? 'pz.receiving.summary.breakdown.hide' : 'pz.receiving.summary.breakdown.show', undefined, {

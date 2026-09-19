@@ -213,11 +213,12 @@ test.describe('TC-WHM-001 warehouseman panel access', () => {
 
   test('a stub action opens from the home screen and leads back', async ({ page }) => {
     await signIn(page, assignedEmail)
-    await page.getByRole('link', { name: /Przyjęcie towaru|Goods receipt/ }).click()
-    await expect(page).toHaveURL(/\/warehouseman\/receiving$/)
+    // Goods receipt is no longer a stub, so the stub contract is asserted on one that is.
+    await page.getByRole('link', { name: /Skanuj produkt|Scan product/ }).click()
+    await expect(page).toHaveURL(/\/warehouseman\/scan$/)
     await expect(page.getByText(/nie jest jeszcze dostępna|not available yet/)).toBeVisible()
 
-    await page.getByRole('link', { name: /Wróć|Back/ }).click()
+    await page.getByRole('link', { name: /^(Wróć|Back)$/ }).click()
     await expect(page).toHaveURL(/\/warehouseman$/)
   })
 

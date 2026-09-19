@@ -1,32 +1,38 @@
 "use client"
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
-import { Button } from '@open-mercato/ui/primitives/button'
+import { LogOut } from 'lucide-react'
+import { IconButton } from '@open-mercato/ui/primitives/icon-button'
+import { Alert, AlertDescription } from '@open-mercato/ui/primitives/alert'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { PanelBody, PanelSurface, PanelTopBar } from './PanelUI'
 
 export const PANEL_LOGIN_PATH = '/warehouseman/login'
 
 export type PanelShellProps = {
   userLabel?: string
   warehouseName?: string | null
+  /** Omitted on the panel home, where the warehouse itself is the title. */
+  titleKey?: string
+  backHref?: string
+  backLabelKey?: string
   children?: React.ReactNode
 }
 
 /**
- * Chrome shared by every panel screen. The layout is phone-first and deliberately
- * single-column: the panel is used on a handheld device by someone wearing gloves,
- * so targets stay large and generously separated at every width.
- *
- * The header names the warehouse and the signed-in person on every screen. On a
- * shared tablet, "who is this logged in as" is the question that causes wrong-user
- * actions later.
+ * Chrome shared by every panel screen: one column, large targets, and a top bar that names
+ * the warehouse and the signed-in person everywhere. On a shared tablet, "who is this logged
+ * in as" is the question that causes wrong-user actions later.
  */
-export function PanelShell({ userLabel, warehouseName, children }: PanelShellProps) {
+export function PanelShell({ userLabel, warehouseName, titleKey, backHref, backLabelKey, children }: PanelShellProps) {
   const t = useT()
   const router = useRouter()
   const [signingOut, setSigningOut] = React.useState(false)
   const [signOutFailed, setSignOutFailed] = React.useState(false)
+
+  const warehouse = warehouseName || t('warehouseman.panel.noWarehouse')
+  const title = titleKey ? t(titleKey) : null
 
   async function onSignOut() {
     if (signingOut) return
@@ -52,32 +58,34 @@ export function PanelShell({ userLabel, warehouseName, children }: PanelShellPro
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <header className="flex flex-col gap-4 border-b border-border px-4 py-4">
-        <div className="flex flex-col gap-1">
-          <h1 className="text-xl font-semibold">
-            {warehouseName || t('warehouseman.panel.noWarehouse')}
-          </h1>
-          {userLabel ? <p className="text-lg text-muted-foreground">{userLabel}</p> : null}
-        </div>
-        <Button
-          type="button"
-          size="lg"
-          variant="outline"
-          className="h-16 w-full text-lg"
-          onClick={onSignOut}
-          disabled={signingOut}
-        >
-          {t('warehouseman.panel.signOut')}
-        </Button>
+    <PanelSurface>
+      <PanelTopBar
+        title={title ?? warehouse}
+        subtitle={title ? warehouse : userLabel || null}
+        backHref={backHref}
+        backLabel={backLabelKey ? t(backLabelKey) : undefined}
+        actions={
+          <IconButton
+            type="button"
+            variant="outline"
+            className="size-14 border-2"
+            aria-label={t('warehouseman.panel.signOut')}
+            disabled={signingOut}
+            onClick={onSignOut}
+          >
+            <LogOut className="size-7" aria-hidden="true" />
+          </IconButton>
+        }
+      />
+      <PanelBody>
         {signOutFailed ? (
-          <p role="alert" className="text-lg text-destructive">
-            {t('warehouseman.panel.signOutFailed')}
-          </p>
+          <Alert status="error" className="border-2 border-status-error-border bg-status-error-bg">
+            <AlertDescription className="text-lg">{t('warehouseman.panel.signOutFailed')}</AlertDescription>
+          </Alert>
         ) : null}
-      </header>
-      <main className="flex flex-col gap-4 px-4 py-6 text-lg">{children}</main>
-    </div>
+        {children}
+      </PanelBody>
+    </PanelSurface>
   )
 }
 

@@ -8,6 +8,7 @@ import { Label } from '@open-mercato/ui/primitives/label'
 import { Alert, AlertDescription } from '@open-mercato/ui/primitives/alert'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { PANEL_PRIMARY, PanelCard, PanelSurface } from './PanelUI'
 import type { DemoCredentials } from '../lib/demoCredentials'
 
 export const PANEL_HOME_PATH = '/warehouseman'
@@ -62,13 +63,13 @@ export function PanelLoginForm({ demoCredentials }: { demoCredentials?: DemoCred
   }
 
   return (
-    <div className="flex min-h-screen flex-col justify-center bg-background px-4 py-8 text-foreground">
-      <form onSubmit={onSubmit} className="mx-auto flex w-full max-w-md flex-col gap-4 text-lg">
-        <h1 className="text-2xl font-semibold">{t('warehouseman.login.title')}</h1>
+    <PanelSurface className="justify-center px-4 py-8">
+      <form onSubmit={onSubmit} className="mx-auto flex w-full max-w-md flex-col gap-4">
+        <h1 className="text-3xl font-bold tracking-tight">{t('warehouseman.login.title')}</h1>
         {demoCredentials ? (
-          <div className="rounded-md border border-border bg-muted p-4">
-            <p className="font-medium">{t('warehouseman.login.demoTitle')}</p>
-            <dl className="mt-2 flex flex-col gap-1">
+          <PanelCard className="bg-muted">
+            <p className="text-lg font-bold">{t('warehouseman.login.demoTitle')}</p>
+            <dl className="mt-2 flex flex-col gap-1 text-lg">
               <div className="flex flex-wrap gap-2">
                 <dt className="text-muted-foreground">{t('warehouseman.login.email')}</dt>
                 <dd className="font-mono">{demoCredentials.email}</dd>
@@ -78,39 +79,38 @@ export function PanelLoginForm({ demoCredentials }: { demoCredentials?: DemoCred
                 <dd className="font-mono">{demoCredentials.password}</dd>
               </div>
             </dl>
-          </div>
+          </PanelCard>
         ) : null}
         {error ? (
-          <Alert variant="destructive">
+          <Alert status="error" className="border-2 border-status-error-border bg-status-error-bg">
             <AlertDescription className="text-lg">{error}</AlertDescription>
           </Alert>
         ) : null}
         <div className="flex flex-col gap-2">
-          <Label htmlFor="warehouseman-email" className="text-lg">{t('warehouseman.login.email')}</Label>
+          <Label htmlFor="warehouseman-email" className="text-lg font-semibold">{t('warehouseman.login.email')}</Label>
           <EmailInput
             id="warehouseman-email"
             name="email"
             autoComplete="username"
             required
-            // The wrapper's 1px borders come out of the inner element's height, so an
-            // `h-16` wrapper leaves a 62px input. The next step on the scale clears the
-            // 64px glove target, and `h-full` makes the input fill the box so a tap
-            // anywhere in the field focuses it rather than nothing.
-            className="h-18"
-            inputClassName="h-full text-lg"
+            // The wrapper's borders come out of the inner element's height, so the box is
+            // sized a step above the 64px glove target and `h-full` makes the input fill it
+            // — a tap anywhere in the field focuses it rather than nothing.
+            className="h-20 border-2 px-4"
+            inputClassName="h-full text-xl"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
           />
         </div>
         <div className="flex flex-col gap-2">
-          <Label htmlFor="warehouseman-password" className="text-lg">{t('warehouseman.login.password')}</Label>
+          <Label htmlFor="warehouseman-password" className="text-lg font-semibold">{t('warehouseman.login.password')}</Label>
           <PasswordInput
             id="warehouseman-password"
             name="password"
             autoComplete="current-password"
             required
-            className="h-18"
-            inputClassName="h-full text-lg"
+            className="h-20 border-2 px-4"
+            inputClassName="h-full text-xl"
             // The reveal toggle is a ~16px target sitting ~8px from the field, which no
             // gloved hand can hit without also hitting the input. Gloves lose the toggle.
             revealable={false}
@@ -118,11 +118,11 @@ export function PanelLoginForm({ demoCredentials }: { demoCredentials?: DemoCred
             onChange={(event) => setPassword(event.target.value)}
           />
         </div>
-        <Button type="submit" size="lg" className="h-16 text-lg" disabled={submitting}>
+        <Button type="submit" className={PANEL_PRIMARY} disabled={submitting}>
           {submitting ? t('warehouseman.login.submitting') : t('warehouseman.login.submit')}
         </Button>
       </form>
-    </div>
+    </PanelSurface>
   )
 }
 
