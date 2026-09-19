@@ -10,6 +10,8 @@
   "warehouseman.login.submit": "Zaloguj się",
   "warehouseman.login.submitting": "Logowanie…",
   "warehouseman.login.title": "Logowanie do panelu magazyniera",
+  "warehouseman.nav.panelLink": "Panel magazyniera",
+  "warehouseman.nav.panelLinkNewTab": "(otwiera się w nowej karcie)",
   "warehouseman.panel.backToDocuments": "Wróć do listy dokumentów",
   "warehouseman.panel.backToHome": "Wróć do menu",
   "warehouseman.panel.backToPallets": "Wróć do listy nośników",

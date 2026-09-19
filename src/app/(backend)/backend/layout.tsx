@@ -12,7 +12,16 @@ import { APP_VERSION } from '@open-mercato/shared/lib/version'
 import { parseBooleanWithDefault } from '@open-mercato/shared/lib/boolean'
 import { PageInjectionBoundary } from '@open-mercato/ui/backend/injection/PageInjectionBoundary'
 import { DemoFeedbackWidget } from '@/components/DemoFeedbackWidget'
+import { NewTabMenuItems } from '@/components/NewTabMenuItems'
+import { WAREHOUSEMAN_PANEL_MENU_ITEM_ID } from '@/modules/warehouseman/lib/panelMenu'
 import { BackendHeaderChrome } from '@/components/BackendHeaderChrome'
+
+/**
+ * Sidebar entries that point at a surface outside `/backend` and must therefore open in
+ * their own tab rather than replace the backend the user is working in. The installed
+ * sidebar cannot express that, so the app shell adds it — see `NewTabMenuItems`.
+ */
+const NEW_TAB_MENU_ITEM_IDS = [WAREHOUSEMAN_PANEL_MENU_ITEM_ID]
 
 function collectStaticSettingsPathPrefixes(): string[] {
   const prefixes = new Set<string>()
@@ -139,6 +148,10 @@ export default async function BackendLayout({
         <PageInjectionBoundary path={path} context={injectionContext}>
           {children}
         </PageInjectionBoundary>
+        <NewTabMenuItems
+          menuItemIds={NEW_TAB_MENU_ITEM_IDS}
+          newTabHint={translate('warehouseman.nav.panelLinkNewTab', '(opens in a new tab)')}
+        />
         {demoModeEnabled ? <DemoFeedbackWidget demoModeEnabled={demoModeEnabled} /> : null}
       </AppShell>
     </I18nProvider>

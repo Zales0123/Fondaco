@@ -10,6 +10,8 @@
   "warehouseman.login.submit": "Sign in",
   "warehouseman.login.submitting": "Signing in…",
   "warehouseman.login.title": "Warehouseman panel sign in",
+  "warehouseman.nav.panelLink": "Warehouseman panel",
+  "warehouseman.nav.panelLinkNewTab": "(opens in a new tab)",
   "warehouseman.panel.backToDocuments": "Back to the document list",
   "warehouseman.panel.backToHome": "Back to the menu",
   "warehouseman.panel.backToPallets": "Back to the pallet list",
