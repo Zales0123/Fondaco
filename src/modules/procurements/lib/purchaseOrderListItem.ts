@@ -20,6 +20,13 @@ export type PurchaseOrderLineItem = {
   /** quantity × price, rounded once on the server so every screen prints the same value. */
   netValue: string | null
   expectedDate: string | null
+  /**
+   * How much of this line warehouse announcements currently hold, and how much a new one
+   * could still take. Both are `null` until the route has read the commitment ledger, so a
+   * response that could not answer never shows a confident zero.
+   */
+  quantityAnnounced: string | null
+  quantityFree: string | null
 }
 
 /** Raw projection the query engine returns for a Purchase Order list row. */
@@ -131,6 +138,8 @@ export function toPurchaseOrderLineItem(row: PurchaseOrderLineRow): PurchaseOrde
     unitPriceNet,
     netValue: lineNetValue(quantityOrdered, unitPriceNet),
     expectedDate: toIsoDay(row.expected_date),
+    quantityAnnounced: null,
+    quantityFree: null,
   }
 }
 

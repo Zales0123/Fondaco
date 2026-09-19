@@ -24,6 +24,7 @@ import {
   type ProcurementsReadDatabase,
   resolveScopedOrganizationIds,
 } from '../readModel'
+import { readAnnouncedQuantities, toAnnouncementLimits } from '../announcementReads'
 
 const F = {
   id: 'id',
@@ -169,6 +170,22 @@ async function decorateAggregates(
       : sumDecimals(values as string[])
     if (withLines) item.lines = lines
   }
+
+  // Only the detail view renders the lines, so only it pays for reading the ledger.
+  if (!withLines) return
+  const lineItems = items.flatMap((item) => item.lines ?? [])
+  if (lineItems.length === 0) return
+  const announced = await readAnnouncedQuantities(ctx, lineItems.map((line) => line.id))
+  const limits = toAnnouncementLimits(
+    lineItems.map((line) => ({ id: line.id, quantityOrdered: line.quantityOrdered })),
+    announced,
+  )
+  for (const line of lineItems) {
+    const limit = limits.get(line.id)
+    if (!limit) continue
+    line.quantityAnnounced = limit.announced
+    line.quantityFree = limit.isConsistent ? limit.free : null
+  }
 }
 
 export const { metadata, GET, POST, PUT, DELETE } = makeCrudRoute({
@@ -312,6 +329,8 @@ const purchaseOrderLineItemSchema = z.object({
   unitPriceNet: z.string(),
   netValue: z.string().nullable(),
   expectedDate: z.string().nullable(),
+  quantityAnnounced: z.string().nullable(),
+  quantityFree: z.string().nullable(),
 })
 
 const purchaseOrderListItemSchema = z.object({

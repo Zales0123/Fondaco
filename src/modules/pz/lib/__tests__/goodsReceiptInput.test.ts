@@ -113,7 +113,17 @@ describe('parseGoodsReceiptWriteInput', () => {
       documentDate: '2026-09-18',
       supplierName: 'Hurtownia Kowalski',
       warehouseId: WAREHOUSE,
-      lines: [{ catalogProductId: PRODUCT, quantity: '2.5000', unit: 'szt' }],
+      lines: [
+        {
+          catalogProductId: PRODUCT,
+          quantity: '2.5000',
+          unit: 'szt',
+          // A delivery that names no purchase order is an ordinary document, not an
+          // incomplete one: samples and warranty replacements arrive without an order.
+          purchaseOrderId: null,
+          purchaseOrderLineId: null,
+        },
+      ],
     })
   })
 
@@ -191,5 +201,54 @@ describe('parseGoodsReceiptWriteInput', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.value.lines[0].unit).toBeNull()
+  })
+})
+
+describe('parseGoodsReceiptWriteInput purchase order reference', () => {
+  const ORDER = '44444444-4444-4444-8444-444444444444'
+  const ORDER_LINE = '55555555-5555-4555-8555-555555555555'
+
+  function withReference(reference: Record<string, unknown>) {
+    return validPayload({
+      lines: [{ catalogProductId: PRODUCT, quantity: '2.5', unit: 'szt', ...reference }],
+    })
+  }
+
+  it('keeps both halves of a complete reference', () => {
+    const result = parse(withReference({ purchaseOrderId: ORDER, purchaseOrderLineId: ORDER_LINE }))
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.lines[0]).toMatchObject({
+      purchaseOrderId: ORDER,
+      purchaseOrderLineId: ORDER_LINE,
+    })
+  })
+
+  it('accepts a line with no reference at all', () => {
+    expect(parse(withReference({})).ok).toBe(true)
+    expect(parse(withReference({ purchaseOrderId: '', purchaseOrderLineId: '' })).ok).toBe(true)
+  })
+
+  it('refuses an order without the position it settles', () => {
+    // A reference naming only the order could not say which of its lines was delivered,
+    // and the same product legitimately sits on two lines at different prices.
+    const result = parse(withReference({ purchaseOrderId: ORDER }))
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.fields.lines).toContain('linePurchaseOrderInvalid')
+  })
+
+  it('refuses a position without its order', () => {
+    const result = parse(withReference({ purchaseOrderLineId: ORDER_LINE }))
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.fields.lines).toContain('linePurchaseOrderInvalid')
+  })
+
+  it('refuses a reference that is not a pair of identifiers', () => {
+    const result = parse(withReference({ purchaseOrderId: 'ZZ/1/2026', purchaseOrderLineId: '1' }))
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.fields.lines).toContain('linePurchaseOrderInvalid')
   })
 })

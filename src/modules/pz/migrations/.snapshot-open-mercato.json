@@ -144,6 +144,57 @@
           "enumItems": [],
           "mappedType": "uuid"
         },
+        "purchase_order_id": {
+          "name": "purchase_order_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
+        "purchase_order_line_id": {
+          "name": "purchase_order_line_id",
+          "type": "uuid",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "uuid"
+        },
+        "purchase_order_snapshot": {
+          "name": "purchase_order_snapshot",
+          "type": "jsonb",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "json"
+        },
         "quantity": {
           "name": "quantity",
           "type": "numeric(18,4)",
@@ -240,6 +291,18 @@
           "keyName": "pz_goods_receipt_lines_pkey",
           "primary": true,
           "unique": true
+        },
+        {
+          "columnNames": [
+            "tenant_id",
+            "organization_id",
+            "purchase_order_line_id"
+          ],
+          "composite": true,
+          "constraint": false,
+          "keyName": "pz_goods_receipt_lines_purchase_order_line_idx",
+          "primary": false,
+          "unique": false
         },
         {
           "columnNames": [

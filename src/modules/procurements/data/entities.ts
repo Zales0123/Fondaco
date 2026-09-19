@@ -154,6 +154,13 @@ export class PurchaseOrder {
 
   @Property({ name: 'deleted_at', type: Date, nullable: true })
   deletedAt?: Date | null
+
+  /**
+   * What warehouse announcements have taken from this order's lines. In-module relation: a
+   * commitment is part of the order and cannot outlive it.
+   */
+  @OneToMany(() => PurchaseOrderCommitment, (commitment) => commitment.purchaseOrder)
+  commitments = new Collection<PurchaseOrderCommitment>(this)
 }
 
 @Entity({ tableName: 'procurements_purchase_order_lines' })
@@ -223,6 +230,118 @@ export class PurchaseOrderLine {
   /** This line's own delivery date; prefilled from the header and editable per line. */
   @Property({ name: 'expected_date', type: 'date', nullable: true })
   expectedDate?: Date | null
+
+  @OneToMany(() => PurchaseOrderCommitment, (commitment) => commitment.purchaseOrderLine)
+  commitments = new Collection<PurchaseOrderCommitment>(this)
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+}
+
+/**
+ * Where a commitment came from. Only warehouse announcements make one today; the column is
+ * a discriminator rather than a boolean so a later source (a production order, a transfer)
+ * joins without a migration that rewrites the meaning of existing rows.
+ */
+export type PurchaseOrderCommitmentSource = 'awizo'
+
+/**
+ * A commitment's life. `outstanding` is announced and not yet settled; `released` was given
+ * back when the announcement was withdrawn or cancelled.
+ *
+ * There is deliberately no `consumed` yet. Consuming a commitment means "this quantity has
+ * actually been received", and only confirmed WMS posting can assert that (issues #44–#47).
+ * Adding the state now would leave a value nothing could ever set — the same reason stage 1
+ * shipped without `received`/`closed` order statuses.
+ */
+export type PurchaseOrderCommitmentStatus = 'outstanding' | 'released'
+
+/** The announcing document's number and line, as they stood when the commitment was taken. */
+export type PurchaseOrderCommitmentSourceSnapshot = {
+  documentNumber: string
+  lineNumber: number
+}
+
+/**
+ * How much of one Purchase Order line a warehouse announcement has claimed.
+ *
+ * This is the ledger behind "free to announce". It lives in `procurements` because the
+ * ordered quantity does: the announcing module (`pz`) owns its own document and asks for a
+ * reservation through the command bus, so neither module imports the other's entities.
+ *
+ * Rows are kept after release rather than deleted, because "this Awizo announced 60 and gave
+ * it back" is a fact the buyer needs when a supplier disputes what was scheduled.
+ */
+@Entity({ tableName: 'procurements_purchase_order_commitments' })
+@Index({
+  name: 'procurements_commitments_line_status_idx',
+  properties: ['purchaseOrderLine', 'status'],
+})
+@Index({
+  name: 'procurements_commitments_scope_order_idx',
+  properties: ['tenantId', 'organizationId', 'purchaseOrder'],
+})
+@Index({
+  name: 'procurements_commitments_scope_source_document_idx',
+  properties: ['tenantId', 'organizationId', 'sourceDocumentId'],
+})
+/**
+ * One active commitment per announcing line. Partial on `status = 'outstanding'` so a
+ * released row does not block the same line announcing again, and it is what makes
+ * reserving idempotent: a replayed release hits this index instead of adding a second claim.
+ */
+@Index({
+  name: 'procurements_commitments_active_source_line_unique_idx',
+  expression:
+    'create unique index "procurements_commitments_active_source_line_unique_idx" on "procurements_purchase_order_commitments" ("source_type", "source_line_id") where "status" = \'outstanding\'',
+})
+export class PurchaseOrderCommitment {
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @ManyToOne(() => PurchaseOrder, { fieldName: 'purchase_order_id' })
+  purchaseOrder!: PurchaseOrder
+
+  @ManyToOne(() => PurchaseOrderLine, { fieldName: 'purchase_order_line_id' })
+  purchaseOrderLine!: PurchaseOrderLine
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'source_type', type: 'text', default: 'awizo' })
+  sourceType: PurchaseOrderCommitmentSource = 'awizo'
+
+  /** The announcing document's id — `pz:goods_receipt` today. Scalar by contract. */
+  @Property({ name: 'source_document_id', type: 'uuid' })
+  sourceDocumentId!: string
+
+  /** The announcing line's id, and what makes a replayed reservation idempotent. */
+  @Property({ name: 'source_line_id', type: 'uuid' })
+  sourceLineId!: string
+
+  /**
+   * Kept so the order can list what announced against it without reading the other module's
+   * tables, and so the entry stays readable after that document is gone.
+   */
+  @Property({ name: 'source_snapshot', type: 'jsonb', nullable: true })
+  sourceSnapshot?: PurchaseOrderCommitmentSourceSnapshot | null
+
+  /** Always `> 0`, in the order line's unit. Same precision as the ordered quantity. */
+  @Property({ name: 'quantity', type: 'numeric', precision: 18, scale: 4, default: '0' })
+  quantity: string = '0'
+
+  @Property({ name: 'status', type: 'text', default: 'outstanding' })
+  status: PurchaseOrderCommitmentStatus = 'outstanding'
+
+  /** When the quantity went back to the order's free limit; null while outstanding. */
+  @Property({ name: 'released_at', type: Date, nullable: true })
+  releasedAt?: Date | null
 
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()

@@ -38,7 +38,10 @@ Ten dokument nie wdraża funkcji ani nie zmienia publicznych kontraktów, schema
 
 ## Proposed Solution
 
-`procurements` jest właścicielem PO i jego pozycji. Pozycja nie stanowi osobnego modułu: jest częścią zamówienia z własnym identyfikatorem i widokiem zbiorczym. `inbound_deliveries` odpowiada za awizacje i ich pozycje. Istniejące PZ i Panel obsługują przyjęcie i liczenie; nie budujemy drugiego panelu przyjęcia.
+`procurements` jest właścicielem PO i jego pozycji. Pozycja nie stanowi osobnego modułu: jest częścią zamówienia z własnym identyfikatorem i widokiem zbiorczym. Istniejące PZ i Panel obsługują przyjęcie i liczenie; nie budujemy drugiego panelu przyjęcia.
+
+**Korekta 2026-09-19 (awizo należy do `pz`, nie do nowego modułu).** Pierwsza wersja tego dokumentu zakładała moduł `inbound_deliveries` z własnym `ArrivalNotice`. Było to błędne: spec `.ai/specs/2026-09-19-awizo-pz-stock-posting.md` (PR #52, issues #40–#49, status „Ready for implementation") rozstrzyga, że dokumentem awizacyjnym jest **obecny dokument modułu `pz`, przemianowany na Awizo** (`/backend/wms/awizo`, `/api/pz/awizo`), a z policzonych palet wystawiane jest osobne, niemutowalne PZ, które dopiero księguje zapas w WMS. Budowa `inbound_deliveries` byłaby dokładnie tym równoległym modelem, przed którym ostrzega niniejszy dokument („bez równoległego modelu", „nie rozpoczynać od dublowania istniejącego PZ").
+Spec #52 ma w Non-goals wprost `purchasing/PO`, a ten dokument oddawał awizacje innemu modułowi — powiązanie ZZ↔Awizo nie należało więc do żadnego z nich. Etap 2 przejmuje tę lukę: `pz` pozostaje właścicielem awiza, `procurements` właścicielem limitu awizowania, a stykiem jest command bus i identyfikatory skalarne. Żaden z modułów nie importuje encji drugiego.
 Dostawca należy do powstającego modułu dostawców. PO i ASN zawierają odwołanie oraz snapshot nazwy, kodu i danych dokumentowych. Szczegółowy interfejs kartoteki trzeba uzgodnić przed implementacją; nazwa `suppliers` jest robocza, nie istniejącym kontraktem.
 Do czasu gotowości kartoteki proponujemy zapisywanie szkiców z nazwą dostawcy. Zatwierdzenie i awizowanie wymagają jednoznacznie wybranego aktywnego dostawcy. Brak modułu wyświetla wyjaśnienie blokady; nie tworzymy tymczasowej drugiej bazy dostawców. Pełny odbiór etapu 1 wymaga gotowego wyboru dostawcy.
 Różnice wobec WM22: obowiązkowe PR usunięte na życzenie użytkownika; SupplierProfile w procurements zastępuje docelowe powiązanie z osobnym modułem dostawców. Dokumenty WM22 nie zostały automatycznie zmienione. Ich reguły limitów i rozdział oczekiwania/liczenia/postingu pozostają wzorcem.
@@ -63,7 +66,8 @@ Tenant i organizacja pochodzą z uwierzytelnionej sesji i wybranego scope, nie z
 | Zakres | Właściciel | Zasada |
 |---|---|---|
 | PO, pozycje, rewizje, limit awizacji | procurements | Jedna odpowiedzialność za ilości zamówione |
-| Awizacja, ETA, pozycje i realizacje dostawy | inbound_deliveries | Referencje do konkretnych pozycji PO |
+| Awizo, jego pozycje, palety i liczenie | app `pz` (spec #52) | Referencja do konkretnej pozycji PO jako skalarny UUID + snapshot |
+| Wystawione PZ i posting zapasu | app `pz` (spec #52, etapy 3–4) | Jedyne źródło „przyjęto"; procurements tego nie liczy |
 | Dostawca | przyszły moduł dostawców | UUID + historyczny snapshot; bez nowej kartoteki w zakupach |
 | Produkt/wariant i jednostka | catalog | Picker i snapshot; nie osobny katalog zakupowy |
 | Magazyn/lokalizacja/ruch | WMS | Jedyna księga zapasu |
@@ -124,10 +128,11 @@ Adresy są robocze; przed wykonaniem należy sprawdzić zgodność nawigacji i t
 | Nowy PO | /backend/purchases/orders/create | CrudForm, grupy Dostawca/Magazyn/Warunki, edytor pozycji | create szkicu |
 | Szczegóły/edycja PO | /backend/purchases/orders/[id] | FormHeader, zakładki, DataTable pozycji, CrudForm edycji | read/update/release/amend/cancel |
 | Pozycje wszystkich PO | /backend/purchases/order-lines | DataTable, termin/status/dostawca, link do PO | read model pozycji; akcja Utwórz awizację w etapie2 |
-| Lista ASN | /backend/wms/arrival-notices | DataTable, ETA/status/magazyn/dostawca | lista i Dodaj |
-| Nowa ASN | /backend/wms/arrival-notices/create | CrudForm, picker pozycji PO, ilości i ETA | create/release |
-| Szczegóły ASN | /backend/wms/arrival-notices/[id] | FormHeader, Pozycje/Przyjęcia/Palety/Różnice/Historia | read/amend/cancel, przejście do przyjęcia |
-| Obecne przyjęcie | istniejący ekran PZ/Panel | zachowany shell; źródło PO/ASN i rozdział liczenia | istniejące operacje liczenia + kontrolowane powiązanie |
+| Lista awiz | istniejący ekran `pz` (`/backend/wms/goods-receipts`, po #41 `/backend/wms/awizo`) | bez zmian; dodana kolumna źródłowego ZZ | istniejąca lista |
+| Nowe/edycja awiza | istniejący formularz `pz` | dodany picker pozycji ZZ w edytorze pozycji, z wolnym limitem | istniejące create/update + wybór pozycji ZZ |
+| Szczegóły awiza | istniejący ekran `pz` | pozycje pokazują źródłowe ZZ/pozycję | read + release/withdraw rezerwują i zwalniają limit |
+| Zakładka Awiza na ZZ | /backend/purchases/orders/[id] | DataTable zobowiązań: awizo, pozycja, ilość, stan | read model zobowiązań |
+| Obecne przyjęcie | istniejący ekran PZ/Panel | zachowany shell; rozdział liczenia wg spec #52 | istniejące operacje liczenia |
 
 ```text
 Zamówienia zakupu                         [+ Zamówienie]
@@ -173,11 +178,10 @@ Model konceptualny, do przełożenia na osobne kontrakty wykonawcze PO i ASN:
 | PurchaseOrder | numer, data, supplierId/snapshot, warehouseId/snapshot, waluta PLN, status, rewizja, kupiec, uwagi |
 | PurchaseOrderLine | orderId, nr pozycji, variantId, snapshot SKU/nazwy/UOM, ilość zamówiona/anulowana, cena jednostkowa netto, termin |
 | PurchaseOrderRevision | orderId, nr rewizji, niezmienny obraz dokumentu, powód, autor, data |
-| Commitment | pozycja PO, pozycja ASN, ilość pozostała/zużyta/zwolniona, wersja |
+| PurchaseOrderCommitment | własność `procurements`: pozycja PO, typ i identyfikator źródła (dokument + pozycja awiza), ilość, stan `outstanding`/`released`/`consumed`, snapshot numeru awiza. Jedno aktywne zobowiązanie na pozycję źródłową |
 | ReceiptCharge | pozycja PO, commitment, identyfikator operacji przyjęcia, ilość, stan, powiązanie korekty |
-| ArrivalNotice | numer, supplierId/snapshot, warehouseId, ETA, brama/rampa, status, uwagi |
-| ArrivalNoticeLine | noticeId, orderLineId, variantId/snapshot, jednostka, expectedQty, commitmentId |
-| Powiązanie przyjęcia | pozycja ASN, konkretna pozycja przyjęcia i ilość rozliczona; rozdział wyników liczenia audytowany |
+| Awizo i jego pozycja | własność `pz` (spec #52). Pozycja zyskuje `purchase_order_id`, `purchase_order_line_id` i snapshot numeru ZZ/pozycji — skalary, bez relacji ORM między modułami |
+| Powiązanie przyjęcia | pozycja awiza, konkretna pozycja przyjęcia i ilość rozliczona; rozdział wyników liczenia audytowany (spec #52) |
 
 Wszystkie rekordy zawierają UUID, tenantId, organizationId, createdAt i updatedAt; zmiany użytkownika wymagają wersji. Decimal quantities/ceny bez obliczeń na niekontrolowanym float. Jednostka zakupowa w pierwszej wersji zgodna z jednostką przyjęcia; przeliczenia opakowań poza zakresem. Historyczne dokumenty zachowują snapshots; zatwierdzone PO nie są kasowane, tylko korygowane lub anulowane w dozwolonej części.
 Cena >=0, ilość zamówiona >0, stabilny numer pozycji; UNIQUE(scope, typ, numer dokumentu) i UNIQUE(scope, orderId, lineNo). Numer nadaje serwer atomowo, bez max+1. Dokładny format serii nie jest obecnie kontraktem.
@@ -241,11 +245,18 @@ Exit: kupiec tworzy PO bez PR, zatwierdza je z aktywnym dostawcą i śledzi pozy
 
 ### Etap 2 — awizacje z powiązaniem przyjęcia
 
-Zależności: zamknięty etap 1 oraz uzgodnione granice rozdzielenia Awizo/PZ i działający, zweryfikowany przepływ postingu WMS. Ten przepływ jest osobną zależnością prac nad przyjęciem, nie funkcją dostarczaną przez sam moduł zakupów/awizacji. Obecne PZ go nie zapewnia. Jeżeli nie został dostarczony w tych pracach, etap 2 nie osiąga pełnego odbioru; samo uzgodnienie interfejsu nie wystarcza. Nie rozpoczynać od dublowania istniejącego PZ. Wartość: kontrolowana dostawa i jednoznaczna realizacja PO.
-1. Dostarczyć pion awizacji: listę, formularz, źródłowe pozycje i limit rezerwowany przez procurements; testy TEST-003/004/007/008.
-2. Powiązać przyjęcie z pozycjami ASN, zachować obecne liczenie i wprowadzić jawne przypisanie ilości źródłowych; TEST-005/006.
-3. Włączyć potwierdzone rozliczenie, częściowe dostawy i decyzję o niedoborze, kontrolowane korekty oraz recovery istniejącej operacji; TEST-005/007. Bez potwierdzonego postingu nie wyświetlać PO jako przyjętego i nie zamykać etapu.
-Exit: PO100/ASN60/przyjęcie55 ma prawidłowe osobne ilości; brak podwójnej awizacji i postingu; zachowane lineage PZ; REQ-004/005/006, AC-003/004/005/006.
+Awizo jest dokumentem modułu `pz` (spec #52). Etap 2 nie tworzy dokumentu awizacyjnego — dokłada do istniejącego odwołanie do pozycji ZZ i buduje po stronie `procurements` limit awizowania. Dzieli się na dwie części o różnych zależnościach, bo tylko pierwsza jest wykonalna przed dostarczeniem postingu.
+
+**Etap 2a — powiązanie i limit awizowania.** Zależności: zamknięty etap 1. Nie wymaga postingu WMS. Wartość: pozycja ZZ wie, ile z niej już zaawizowano i ile wolno jeszcze zaawizować.
+1. `procurements`: encja `PurchaseOrderCommitment`, arytmetyka limitu na `BigInt`, komendy `procurements.commitments.reserve/release`, kolumny `awizowano`/`wolne do awizacji` w widoku pozycji, źródło pickera pozycji dostępnych do awizacji.
+2. `pz`: pozycja awiza zyskuje `purchase_order_id`/`purchase_order_line_id`/snapshot, picker pozycji ZZ w edytorze, a `release`/`withdraw` rezerwują i zwalniają limit przez command bus.
+3. UI: zakładka Awiza na ZZ, kolumny limitu w widoku pozycji, wskazanie źródłowego ZZ na pozycji awiza. Testy TEST-003/004/008.
+Exit 2a: PO100 + dwa równoległe awiza po 60 → jedno zarezerwowane, drugie 409; wycofanie awiza zwalnia limit; pozycja ZZ pokazuje 60 zaawizowane i 40 wolne. Nie pokazywać „przyjęto"/„zaksięgowano" — etap 2a nie ma do tego dowodu.
+
+**Etap 2b — rozliczenie potwierdzonym przyjęciem.** Zależności: dostarczone i zweryfikowane #44–#47 (wystawienie PZ z policzonych palet i posting do WMS). Obecne PZ tego nie zapewnia; bez tego etap 2b nie osiąga odbioru, a samo uzgodnienie interfejsu nie wystarcza.
+4. Konsumpcja zobowiązania potwierdzonym postingiem, postedNet na pozycji ZZ, częściowe dostawy i decyzja o niedoborze.
+5. Statusy `partially_received`/`received`/`closed` na ZZ, kontrolowane korekty i recovery; TEST-005/006/007.
+Exit 2b: PO100/awizo60/przyjęcie55 ma prawidłowe osobne ilości; brak podwójnej awizacji i postingu; zachowane lineage PZ; REQ-004/005/006, AC-003/004/005/006.
 
 Walidacja implementacji dla każdego etapu: yarn generate && yarn typecheck && yarn lint && yarn ds:check && yarn test && yarn build; integracje yarn test:integration:ephemeral. Bez migracji produkcyjnej do walidacji. Testy będą przypisane do rzeczywistych API/UI w specyfikacjach wykonawczych. TEST-007 obejmuje także podwójne dostarczenie reversal i zwrot limitu według stanu ASN.
 

@@ -233,5 +233,15 @@
   "pz.receiving.summary.subtitle": "{palletCount} pallet(s), {closedCount} closed",
   "pz.receiving.summary.title": "Receiving summary",
   "pz.receiving.summary.totals": "Total: expected {expected}, counted {counted}",
-  "pz.receiving.summary.unknownProduct": "Product no longer in the catalog"
+  "pz.receiving.summary.unknownProduct": "Product no longer in the catalog",
+  "pz.goodsReceipts.form.lines.column.purchaseOrder": "Purchase order",
+  "pz.goodsReceipts.form.lines.purchaseOrder.label": "Purchase order line for position {position}",
+  "pz.goodsReceipts.form.lines.purchaseOrder.placeholder": "Optional — search an order",
+  "pz.goodsReceipts.form.lines.purchaseOrder.chooseProductFirst": "Choose a product first",
+  "pz.goodsReceipts.view.lines.column.purchaseOrder": "Purchase order",
+  "pz.goodsReceipts.errors.linePurchaseOrderInvalid": "Position {position}: choose the purchase order line from the list.",
+  "pz.goodsReceipts.errors.linePurchaseOrderNotReleased": "Only a released purchase order can be announced against.",
+  "pz.goodsReceipts.errors.linePurchaseOrderVariantMismatch": "The purchase order line is for a different product than this position.",
+  "pz.goodsReceipts.errors.linePurchaseOrderUnavailable": "The purchase order line this position names is no longer available.",
+  "pz.goodsReceipts.errors.purchaseOrderReserveFailed": "The purchase order quantities this delivery announces could not be reserved, so it was not released."
 }

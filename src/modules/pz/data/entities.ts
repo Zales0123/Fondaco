@@ -39,6 +39,17 @@ export type GoodsReceiptCatalogSnapshot = {
 }
 
 /**
+ * The Purchase Order line this one announces against, as it read when it was chosen.
+ *
+ * Kept so the document stays readable without a join into `procurements`, and so it still
+ * names its order after that order's number is corrected.
+ */
+export type GoodsReceiptPurchaseOrderSnapshot = {
+  documentNumber: string
+  lineNumber: number
+}
+
+/**
  * Unit of measure as it stood when the line was saved: the code the document means, plus
  * the product's default at that moment, so a later change to the product's default unit
  * cannot make a past line look like it was entered against a different one.
@@ -131,6 +142,11 @@ export class GoodsReceipt {
   name: 'pz_goods_receipt_lines_scope_idx',
   properties: ['tenantId', 'organizationId', 'catalogVariantId'],
 })
+/** How the purchasing side asks "what announced against this order line?". */
+@Index({
+  name: 'pz_goods_receipt_lines_purchase_order_line_idx',
+  properties: ['tenantId', 'organizationId', 'purchaseOrderLineId'],
+})
 export class GoodsReceiptLine {
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
@@ -169,6 +185,25 @@ export class GoodsReceiptLine {
 
   @Property({ name: 'uom_snapshot', type: 'jsonb', nullable: true })
   uomSnapshot?: GoodsReceiptUomSnapshot | null
+
+  /**
+   * The `procurements:purchase_order` this line announces against, or null for a delivery
+   * that arrived without one — a sample, a warranty replacement, a supplier's own correction.
+   * Scalar by contract: no cross-module ORM relation (ADR-0004).
+   */
+  @Property({ name: 'purchase_order_id', type: 'uuid', nullable: true })
+  purchaseOrderId?: string | null
+
+  /**
+   * The `procurements:purchase_order_line` this line settles. Always set together with the
+   * order id: the same product may sit on two lines of one order at different prices and
+   * dates, so naming only the order would leave the delivery unable to say which it means.
+   */
+  @Property({ name: 'purchase_order_line_id', type: 'uuid', nullable: true })
+  purchaseOrderLineId?: string | null
+
+  @Property({ name: 'purchase_order_snapshot', type: 'jsonb', nullable: true })
+  purchaseOrderSnapshot?: GoodsReceiptPurchaseOrderSnapshot | null
 
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()
