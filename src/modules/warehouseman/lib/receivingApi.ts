@@ -2,6 +2,9 @@
 import { apiCall, readApiResultOrThrow, withScopedApiRequestHeaders } from '@open-mercato/ui/backend/utils/apiCall'
 import { buildOptimisticLockHeader } from '@open-mercato/ui/backend/utils/optimisticLock'
 import { buildFailedPostingsQuery, buildReceivingListQuery, type WarehouseFilter } from './receivingPanel'
+import type { ReceivingExpectedLine } from './expectedContents'
+
+export type { ReceivingExpectedLine } from './expectedContents'
 
 export type StockPostingState = {
   status: 'not_applicable' | 'pending' | 'posted' | 'failed'
@@ -19,6 +22,11 @@ export type ReceivingDocument = {
   warehouseSnapshot: { name: string; code: string } | null
   palletCount: number
   stockPosting: StockPostingState
+  /**
+   * What the document says should arrive. Only a single-record read carries them; a list page
+   * answers `null`, so "not loaded" and "expects nothing" never look the same.
+   */
+  lines: ReceivingExpectedLine[] | null
   updatedAt: string | null
 }
 

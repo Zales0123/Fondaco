@@ -10,7 +10,10 @@ decisions that shape it.
 | --- | --- |
 | `/warehouseman/login` | The panel's own sign-in page. Public, glove-sized. |
 | `/warehouseman` | Panel home: header plus the four action buttons. |
-| `/warehouseman/receiving` | Goods receipt — a stub action. |
+| `/warehouseman/receiving` | Goods receiving: the deliveries released to this floor. |
+| `/warehouseman/receiving/[receiptId]` | One delivery: its pallets, and what the document says should arrive. |
+| `/warehouseman/receiving/[receiptId]/pallets/[palletId]` | Counting products onto one pallet. |
+| `/warehouseman/receiving/[receiptId]/summary` | Expected against counted, and finishing the delivery. |
 | `/warehouseman/scan` | Scan product — a scan opens the camera and answers what the code is and how much of it is in stock. |
 | `/warehouseman/transfer` | Transfer — a stub action. |
 | `/warehouseman/stocktake` | Stocktake — a stub action. |
@@ -41,6 +44,17 @@ holding a scanner reads a line, not a table.
 
 Typing the code stays the path that always works: over plain http a phone has no secure
 context and therefore no camera at all.
+
+A delivery screen shows its pallets first and the document's own lines underneath, under
+**Expected in this delivery** — product, SKU and the quantity the office wrote, in the
+document's order. It carries no counts and compares nothing: that is the summary screen's
+job, and a second comparison here would be a second chance to disagree about what arrived.
+Without it the floor counts blind and a missing product surfaces only at the summary, once
+the truck has gone. Lines are never merged per product — the same product on two lines is
+something the office wrote on purpose, and folding it into one row would show a delivery
+that does not match the paperwork in somebody's hand. A document the panel could not read
+says so rather than showing an empty list: "expects nothing" would send somebody looking
+for goods nobody ordered.
 
 The header names the assigned warehouse and the signed-in person on every screen, and
 carries the sign-out control. A warehouseman with no assigned warehouse is told so and
