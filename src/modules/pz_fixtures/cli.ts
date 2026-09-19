@@ -2,7 +2,10 @@ import type { ModuleCli } from '@open-mercato/shared/modules/registry'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { seedGoodsReceipts } from './lib/seed'
-import { FIXTURE_DOCUMENT_PREFIX } from './lib/receipts'
+import { FIXTURE_DOCUMENT_PREFIX, type FixtureIntent } from './lib/receipts'
+import { STOCK_POSTING_TOGGLE } from '@/modules/pz/lib/destinations'
+import { enableStockPosting, readStockPostingState, type StockPostingSetupSummary } from './lib/posting'
+import type { DefaultDestinationPlan } from './lib/postingPlan'
 
 function parseArgs(rest: string[]): Record<string, string> {
   const args: Record<string, string> = {}
@@ -18,6 +21,13 @@ function parseArgs(rest: string[]): Record<string, string> {
     } else args[rawKey] = 'true'
   }
   return args
+}
+
+/** A bare `--flag` means yes; `--flag=false` is still honoured so a script can say no. */
+function parseFlag(args: Record<string, string>, key: string): boolean {
+  const raw = args[key]
+  if (raw === undefined) return false
+  return !['false', '0', 'no'].includes(raw.trim().toLowerCase())
 }
 
 type ScopeRow = { id: string }
@@ -68,6 +78,48 @@ async function withContainer<T>(run: (container: Awaited<ReturnType<typeof creat
   }
 }
 
+const INTENT_LABELS: Record<FixtureIntent, string> = {
+  postable: 'postable — confirming it posts stock',
+  lotBlocked: 'lot-tracked — confirming it is refused',
+  mixed: 'ordinary',
+}
+
+/**
+ * The same plan reads differently depending on whether it was carried out: `status` reports
+ * what would happen, the seed reports what did. Saying "set to B-01-01" after a read-only
+ * command would be a plain lie about the state of the database.
+ */
+function describeDestination(plan: DefaultDestinationPlan, applied: boolean): string {
+  if (plan.action === 'skip') return 'no eligible location — nothing to preselect'
+  if (plan.action === 'set') {
+    const code = plan.destination?.code ?? '?'
+    return applied
+      ? `default destination set to ${code}`
+      : `no default destination — ${code} would be preselected`
+  }
+  if (!plan.currentDefaultEligible) {
+    return 'default destination already set, but it is not an eligible location — left as it is'
+  }
+  return `default destination already set to ${plan.destination?.code ?? '?'} — left as it is`
+}
+
+function printPostingSetup(summary: StockPostingSetupSummary): void {
+  console.log('🚚 Stock posting:')
+  if (summary.toggle.outcome === 'alreadyEnabled') {
+    console.log(`   ${STOCK_POSTING_TOGGLE}: already on for this tenant`)
+  } else if (summary.toggle.outcome === 'enabled') {
+    console.log(`   ${STOCK_POSTING_TOGGLE}: enabled for this tenant`)
+  } else {
+    console.log(`   ⚠️  ${STOCK_POSTING_TOGGLE}: not enabled — ${summary.toggle.reason}`)
+  }
+  for (const plan of summary.destinations) {
+    console.log(`   ${plan.warehouseName}: ${describeDestination(plan, true)}`)
+  }
+  for (const failure of summary.failures) {
+    console.log(`   ⚠️  ${failure.warehouseName}: ${failure.reason}`)
+  }
+}
+
 const seedCommand: ModuleCli = {
   command: 'seed',
   async run(rest) {
@@ -82,7 +134,7 @@ const seedCommand: ModuleCli = {
         })
       } catch (err) {
         console.error(err instanceof Error ? err.message : String(err))
-        console.error('Usage: mercato pz_fixtures seed [--tenant <id>] [--org <id>] [--release <n>]')
+        console.error('Usage: mercato pz_fixtures seed [--tenant <id>] [--org <id>] [--release <n>] [--no-posting]')
         process.exitCode = 1
         return
       }
@@ -95,6 +147,7 @@ const seedCommand: ModuleCli = {
       try {
         summary = await seedGoodsReceipts(em, container, scope, {
           release: Number.isFinite(release) ? release : 0,
+          enablePosting: !parseFlag(args, 'no-posting'),
         })
       } catch (err) {
         console.error(err instanceof Error ? err.message : String(err))
@@ -106,10 +159,63 @@ const seedCommand: ModuleCli = {
       console.log(`   ${summary.planned} planned`)
       console.log(`   ${summary.created} created, ${summary.alreadyPresent} already present`)
       if (summary.released) console.log(`   ${summary.released} released to receiving`)
+      for (const document of summary.documents) {
+        if (document.intent === 'mixed') continue
+        const state = document.intentSatisfied ? INTENT_LABELS[document.intent] : 'could not be shaped as planned'
+        const released = document.released ? ', released' : ''
+        console.log(`   ${document.documentNumber} · ${document.warehouseName} · ${state}${released}`)
+      }
       for (const failure of summary.failed) {
         console.log(`   ⚠️  ${failure.documentNumber}: ${failure.reason}`)
       }
+
+      if (summary.posting) printPostingSetup(summary.posting)
+      else console.log('🚚 Stock posting: left alone (--no-posting)')
+
       if (summary.failed.length) process.exitCode = 1
+    })
+  },
+}
+
+/**
+ * The reviewer setup on its own, for an environment seeded before the seed did it. It touches
+ * no document, so it is safe to run against a database full of real deliveries — the only
+ * writes are the tenant's toggle override and a Default Destination on a Warehouse that has
+ * none.
+ */
+const enablePostingCommand: ModuleCli = {
+  command: 'enable-posting',
+  async run(rest) {
+    const args = parseArgs(rest)
+    await withContainer(async (container) => {
+      const em = container.resolve<EntityManager>('em')
+      let scope: { tenantId: string; organizationId: string; inferred: boolean }
+      try {
+        scope = await resolveScope(em, {
+          tenantId: args.tenant ?? args.tenantId,
+          organizationId: args.org ?? args.orgId ?? args.organizationId,
+        })
+      } catch (err) {
+        console.error(err instanceof Error ? err.message : String(err))
+        console.error('Usage: mercato pz_fixtures enable-posting [--tenant <id>] [--org <id>]')
+        process.exitCode = 1
+        return
+      }
+      if (scope.inferred) {
+        console.log(`Auto-detected scope: tenant=${scope.tenantId}, org=${scope.organizationId}`)
+      }
+
+      let summary: StockPostingSetupSummary
+      try {
+        summary = await enableStockPosting(em, container, scope)
+      } catch (err) {
+        console.error(err instanceof Error ? err.message : String(err))
+        process.exitCode = 1
+        return
+      }
+
+      printPostingSetup(summary)
+      if (summary.toggle.outcome === 'unavailable' || summary.failures.length) process.exitCode = 1
     })
   },
 }
@@ -145,13 +251,24 @@ const statusCommand: ModuleCli = {
       console.log(`Demo goods receipts (${FIXTURE_DOCUMENT_PREFIX}*) for tenant=${scope.tenantId} org=${scope.organizationId}`)
       if (rows.length === 0) {
         console.log('   none — run `mercato pz_fixtures seed`')
-        return
+      } else {
+        for (const row of rows) console.log(`   ${row.status}: ${row.total}`)
       }
-      for (const row of rows) console.log(`   ${row.status}: ${row.total}`)
+
+      // Documents are only half the story: whether confirming one posts anything depends on
+      // the toggle and on the Warehouse having somewhere to post into, and a reviewer looking
+      // at a seeded environment that refuses every confirmation needs to see which of the two
+      // is missing.
+      const state = await readStockPostingState(em, container, scope)
+      console.log('🚚 Stock posting:')
+      console.log(`   ${STOCK_POSTING_TOGGLE}: ${state.enabled ? 'on' : 'off — run `mercato pz_fixtures enable-posting`'}`)
+      for (const plan of state.destinations) {
+        console.log(`   ${plan.warehouseName}: ${describeDestination(plan, false)}`)
+      }
     })
   },
 }
 
-const commands = [seedCommand, statusCommand]
+const commands = [seedCommand, enablePostingCommand, statusCommand]
 
 export default commands
