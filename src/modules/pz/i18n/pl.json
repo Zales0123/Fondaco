@@ -25,6 +25,7 @@
   "pz.goodsReceipts.errors.linesRequired": "Dodaj co najmniej jedną pozycję.",
   "pz.goodsReceipts.errors.notFound": "To przyjęcie zewnętrzne już nie istnieje.",
   "pz.goodsReceipts.errors.organizationRequired": "Wymagany jest kontekst organizacji.",
+  "pz.goodsReceipts.errors.organizationSelectionInvalid": "Wybrana organizacja nie jest już dostępna. Wybierz organizację ponownie i spróbuj jeszcze raz.",
   "pz.goodsReceipts.errors.redoDocumentNumberTaken": "Ten numer dokumentu został w międzyczasie użyty przez inne przyjęcie, więc nie można ponowić tej operacji.",
   "pz.goodsReceipts.errors.redoStale": "To przyjęcie zewnętrzne zmieniło się od cofnięcia tamtej operacji, więc nie można jej ponowić.",
   "pz.goodsReceipts.errors.supplierRequired": "Dostawca jest wymagany.",

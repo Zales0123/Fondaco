@@ -8,6 +8,8 @@ export const GOODS_RECEIPTS_ENTITY_ID = 'pz:goods_receipt'
 export const GOODS_RECEIPTS_MANAGE_FEATURE = 'pz.goodsReceipts.manage'
 export const GOODS_RECEIPTS_CONFIRM_FEATURE = 'pz.goodsReceipts.confirm'
 export const GOODS_RECEIPTS_TABLE_ID = 'pz.goodsReceipts'
+/** Shared so a screen that changes a goods receipt can invalidate the index it returns to. */
+export const GOODS_RECEIPTS_QUERY_KEY = 'pz.goodsReceipts'
 export const GOODS_RECEIPTS_LIST_HREF = '/backend/wms/goods-receipts'
 export const GOODS_RECEIPTS_CREATE_HREF = `${GOODS_RECEIPTS_LIST_HREF}/create`
 
@@ -116,9 +118,9 @@ export async function confirmGoodsReceipt(id: string, expectedVersion: string | 
       body: JSON.stringify({ id }),
     })
     if (!call.response.ok) {
-      throw Object.assign(new Error(call.result?.error ?? 'Goods receipt confirmation failed'), {
-        status: call.response.status,
-      })
+      // No English fallback here: an empty message is what makes every caller fall back to
+      // its own localized string rather than printing one this module hard-coded.
+      throw Object.assign(new Error(call.result?.error ?? ''), { status: call.response.status })
     }
   })
 }

@@ -58,22 +58,35 @@ async function readGoodsReceipt(request: APIRequestContext, id: string): Promise
   return row
 }
 
-/** Counts every `wms` record a stock posting would touch, so "nothing moved" can be asserted. */
-async function readWmsTotals(request: APIRequestContext): Promise<Record<string, number>> {
+/**
+ * Reads every `wms` record a stock posting would touch, in full.
+ *
+ * Counting rows is not enough: a posting that moved an existing balance, consumed a
+ * reservation or changed a lot's quantity leaves the count exactly where it was. The
+ * records themselves are captured and compared, so "no wms record was created or changed"
+ * (ADR-0005) is what the assertion actually says.
+ */
+async function readWmsRecords(request: APIRequestContext): Promise<Record<string, unknown>> {
   const paths = {
-    balances: '/api/wms/inventory/balances?pageSize=1',
-    movements: '/api/wms/inventory/movements?pageSize=1',
-    reservations: '/api/wms/inventory/reservations?pageSize=1',
-    lots: '/api/wms/lots?pageSize=1',
+    balances: '/api/wms/inventory/balances?pageSize=100',
+    movements: '/api/wms/inventory/movements?pageSize=100',
+    reservations: '/api/wms/inventory/reservations?pageSize=100',
+    lots: '/api/wms/lots?pageSize=100',
   }
-  const totals: Record<string, number> = {}
+  const records: Record<string, unknown> = {}
   for (const [key, path] of Object.entries(paths)) {
     const response = await request.get(path, { failOnStatusCode: false })
     expect(response.status(), `${key} -> ${response.status()}: ${await response.text()}`).toBe(200)
     const body = (await response.json()) as { total?: number; items?: unknown[] }
-    totals[key] = typeof body.total === 'number' ? body.total : (body.items?.length ?? 0)
+    const items = body.items ?? []
+    // Beyond the first page a change would be invisible, and silently comparing two
+    // truncated pages is exactly the false pass this helper exists to avoid. 100 is the
+    // largest page these endpoints accept, so a fuller set has to fail loudly instead.
+    expect(body.total ?? items.length, `${key} holds more rows than one page; compare them another way`)
+      .toBeLessThanOrEqual(100)
+    records[key] = { total: body.total ?? items.length, items }
   }
-  return totals
+  return records
 }
 
 function yesterday(): string {
@@ -195,7 +208,7 @@ test.describe('TC-PZ-004 confirm a goods receipt', () => {
     const draft = await createDraft(admin)
     const before = await readGoodsReceipt(admin, draft.id)
     expect(before.warehouseSnapshot).toBeNull()
-    const stockBefore = await readWmsTotals(admin)
+    const stockBefore = await readWmsRecords(admin)
 
     const confirmed = await admin.post(CONFIRM_API, {
       headers: { [LOCK_HEADER]: before.updatedAt ?? '' },
@@ -211,7 +224,7 @@ test.describe('TC-PZ-004 confirm a goods receipt', () => {
     expect(after.warehouseSnapshot?.code).toBe(`PZQACmain${RUN}`)
 
     // ADR-0005: a goods receipt records a delivery, it does not move stock.
-    expect(await readWmsTotals(admin)).toEqual(stockBefore)
+    expect(await readWmsRecords(admin)).toEqual(stockBefore)
   })
 
   test('is one-way: a confirmed goods receipt refuses confirm, update and delete', async () => {
@@ -263,12 +276,27 @@ test.describe('TC-PZ-004 confirm a goods receipt', () => {
     const draft = await createDraft(admin)
     const current = await readGoodsReceipt(admin, draft.id)
 
-    // The same caller can read and edit the draft, so the refusal is about confirming.
-    const readable = await manager.get(`${API}?ids=${encodeURIComponent(draft.id)}&pageSize=1`)
-    expect(readable.status(), await readable.text()).toBe(200)
+    // The same caller can edit the draft, which is what makes the refusal below about
+    // confirming rather than about a caller who could not touch the document at all.
+    const edited = await manager.put(API, {
+      headers: { [LOCK_HEADER]: current.updatedAt ?? '' },
+      data: {
+        id: draft.id,
+        documentNumber: draft.documentNumber,
+        documentDate: yesterday(),
+        supplierName: 'Hurtownia Magazyniera',
+        warehouseId,
+        lines: [{ catalogProductId: productId, quantity: '4' }],
+      },
+      failOnStatusCode: false,
+    })
+    expect(edited.status(), await edited.text()).toBe(200)
+
+    const afterEdit = await readGoodsReceipt(admin, draft.id)
+    expect(afterEdit.supplierName).toBe('Hurtownia Magazyniera')
 
     const refused = await manager.post(CONFIRM_API, {
-      headers: { [LOCK_HEADER]: current.updatedAt ?? '' },
+      headers: { [LOCK_HEADER]: afterEdit.updatedAt ?? '' },
       data: { id: draft.id },
       failOnStatusCode: false,
     })

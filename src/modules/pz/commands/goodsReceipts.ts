@@ -1441,10 +1441,15 @@ const confirmGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsR
 
 /**
  * Emitted after the commit, so a subscriber can never act on a confirmation that did not
- * happen. It is persistent because the whole point of the event is that work can be hung
- * off it later; losing it because a subscriber was momentarily unavailable would make it
- * useless as a seam. A broadcast failure must not fail a write that has already landed, so
- * it is reported and swallowed.
+ * happen. It is persistent because the whole point of the event is that work can be hung off
+ * it later; losing it because a subscriber was momentarily unavailable would make it useless
+ * as a seam.
+ *
+ * The commit has already landed by the time this runs, so a failure cannot be turned into a
+ * failed request: the document IS confirmed, and telling the caller otherwise would be a
+ * worse lie than a missing broadcast. The cost is real and worth stating — if the queue
+ * itself refuses the enqueue, the confirmation stands with no durable event behind it, so
+ * this is logged at error rather than warn and is the signal to replay from the record.
  */
 async function emitConfirmed(ctx: CommandRuntimeContext, document: SerializedGoodsReceipt): Promise<void> {
   try {

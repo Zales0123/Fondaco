@@ -2,6 +2,7 @@
 import * as React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { useQueryClient } from '@tanstack/react-query'
 import { CrudForm, type CrudField, type CrudFieldOption, type CrudFormGroup } from '@open-mercato/ui/backend/CrudForm'
 import { createCrud, deleteCrud, fetchCrudList, updateCrud } from '@open-mercato/ui/backend/utils/crud'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
@@ -18,6 +19,7 @@ import {
   confirmGoodsReceipt,
   GOODS_RECEIPTS_ENTITY_ID,
   GOODS_RECEIPTS_LIST_HREF,
+  GOODS_RECEIPTS_QUERY_KEY,
   useGoodsReceiptPermissions,
 } from './goodsReceiptsPresentation'
 import { GoodsReceiptLinesEditor } from './GoodsReceiptLinesEditor'
@@ -235,6 +237,7 @@ export function GoodsReceiptEditForm({ id }: { id: string }) {
   const { canConfirm } = useGoodsReceiptPermissions()
   const { confirm, ConfirmDialogElement } = useConfirmDialog()
   const router = useRouter()
+  const queryClient = useQueryClient()
 
   React.useEffect(() => {
     let cancelled = false
@@ -287,13 +290,16 @@ export function GoodsReceiptEditForm({ id }: { id: string }) {
     setConfirming(true)
     try {
       await confirmGoodsReceipt(id, initial?.updatedAt ?? null)
+      // The index this returns to renders from a cached list; without this it would show
+      // the document as a draft, and offer to confirm it again, until a refetch lands.
+      await queryClient.invalidateQueries({ queryKey: [GOODS_RECEIPTS_QUERY_KEY] })
       router.push(withFlash(GOODS_RECEIPTS_LIST_HREF, t('pz.goodsReceipts.form.flash.confirmed'), 'success'))
     } catch (error) {
       setConfirming(false)
       if (surfaceRecordConflict(error, t)) return
       flash(error instanceof Error && error.message ? error.message : t('pz.goodsReceipts.form.error.confirm'), 'error')
     }
-  }, [confirm, id, initial?.updatedAt, router, t])
+  }, [confirm, id, initial?.updatedAt, queryClient, router, t])
 
   const fallbackValues = React.useMemo<GoodsReceiptFormValues>(() => ({
     id,

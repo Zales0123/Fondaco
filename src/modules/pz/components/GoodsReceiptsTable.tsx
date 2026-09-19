@@ -24,12 +24,13 @@ import {
   GOODS_RECEIPTS_LIST_HREF,
   GOODS_RECEIPTS_TABLE_ID,
   confirmGoodsReceipt,
+  GOODS_RECEIPTS_QUERY_KEY,
   useGoodsReceiptPermissions,
   useWarehouseNames,
 } from './goodsReceiptsPresentation'
 
 const PAGE_SIZE = 50
-const QUERY_KEY = 'pz.goodsReceipts'
+const QUERY_KEY = GOODS_RECEIPTS_QUERY_KEY
 
 type GoodsReceiptRow = GoodsReceiptListItem & { warehouseLabel: string }
 
@@ -181,8 +182,10 @@ export default function GoodsReceiptsTable() {
     if (!acknowledged) return
     try {
       await confirmGoodsReceipt(row.id, row.updatedAt)
+      // Awaited, so the row is never left showing Draft and offering an action the server
+      // has just closed off for good.
+      await queryClient.invalidateQueries({ queryKey: [QUERY_KEY] })
       flash(t('pz.goodsReceipts.form.flash.confirmed'), 'success')
-      queryClient.invalidateQueries({ queryKey: [QUERY_KEY] })
     } catch (err) {
       if (surfaceRecordConflict(err, t)) {
         queryClient.invalidateQueries({ queryKey: [QUERY_KEY] })
