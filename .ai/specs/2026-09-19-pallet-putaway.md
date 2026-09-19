@@ -15,10 +15,12 @@ carrier with its own identity, contents, history and a location computed from th
 new app modules carry it: `pallets` owns the carrier and the record of every confirmed placement of
 its goods, and `putaway` owns the floor operation that moves a received pallet from a staging
 location to its storage location through the installed `wms.inventory.move` command with movement
-type `putaway`. Because confirming a Goods Receipt does not put anything into the ledger today, this
-spec also lands the smallest inbound posting slice that makes a pallet exist in `wms` at all. The
-installed WMS stays the only quantity ledger; this app owns the carrier, the work, and the controlled
-execution of the moves.
+type `putaway`. The installed WMS has no `palletId`, so every movement of pallet goods crosses a
+controlled `pallets` command boundary; an unrecognised direct WMS movement is treated as location
+drift and blocks further putaway instead of being attributed to a pallet by guesswork. Because
+confirming a Goods Receipt does not put anything into the ledger today, this spec also lands the
+smallest inbound posting slice that makes a pallet exist in `wms` at all. The installed WMS stays the
+only quantity ledger; this app owns the carrier, the work, and the controlled execution of the moves.
 
 ## Problem Statement
 
@@ -58,7 +60,7 @@ describes an operation the application cannot perform.
 | Measure | Today | After this spec |
 |---|---|---|
 | Counted pallet reaches the stock ledger | never | every confirmed Goods Receipt posts its pallet lines into a staging location |
-| "Where is pallet P?" | unanswerable | computed from confirmed placements, per pallet line |
+| "Where is pallet P?" | unanswerable | last known location from confirmed placements, with integrity status per pallet line |
 | Pallets awaiting putaway | no such concept | a scoped work list keyed on destination-location `type = 'staging'` |
 | Moving a pallet to storage | impossible | scan → scan → scan → confirm, one `wms.inventory.move` per pallet line |
 | Warehouse total on hand after a putaway | n/a | unchanged; only the per-location split moves |
@@ -73,7 +75,8 @@ describes an operation the application cannot perform.
 - **REQ-003** — Confirming a Goods Receipt posts each counted pallet line into a staging location of
   the document's warehouse, once, idempotently, with a per-line stable reference.
 - **REQ-004** — A pallet's current location and contents are computed from confirmed placements, per
-  pallet line; a pallet awaits putaway when a line's current location has `type = 'staging'`.
+  pallet line. A line is actionable only while its derived integrity is `trusted`; a pallet awaits
+  putaway when a trusted line's current location has `type = 'staging'`.
 - **REQ-005** — A Warehouseman sees a work list of pallets awaiting putaway, filtered to their
   Assigned Warehouse, never a list of all pallets.
 - **REQ-006** — The floor flow is scan pallet → scan source → scan destination → summary → confirm.
@@ -93,6 +96,10 @@ describes an operation the application cannot perform.
   and who performed them when.
 - **REQ-013** — A Goods Receipt whose pallets have been put away, or have an unresolved outcome,
   cannot be withdrawn or retro-actively unwound.
+- **REQ-014** — No generic WMS movement may be used to move tracked pallet goods. The `pallets`
+  movement facade is the only supported write path; reconciliation detects an unrecognised WMS
+  movement, marks affected pallet lines `drifted`, removes them from putaway work, and requires a
+  controlled reconciliation before work can resume.
 
 ## Non-goals
 
@@ -108,10 +115,14 @@ built here — REQ-013 only protects what does exist.
 Two new app modules and one subscriber, over the installed WMS:
 
 - **`pallets`** owns the carrier: `Pallet`, `PalletLine`, and `PalletPlacement` — the append-only
-  record of every attempt to place the carrier's goods in the ledger, and therefore the only source
-  for "where is this pallet". It exposes plan / execute / reconcile commands that wrap the installed
-  inventory commands, and a subscriber on `pz.goods_receipt.confirmed` that posts the counted lines
-  into a staging location.
+  record of every attempt to place the carrier's goods in the ledger, and therefore the source for
+  the last known location of each line. It exposes plan / execute / reconcile commands and the only
+  supported movement facade that wraps the installed inventory commands. The facade always creates a
+  placement before calling WMS and passes that placement id as `referenceId`; no pallet-aware caller
+  calls `wms.inventory.receive` or `wms.inventory.move` directly. Reconciliation compares observed WMS
+  movements with known placement references and marks affected lines `drifted` when a direct movement
+  is found. The module also owns a subscriber on `pz.goods_receipt.confirmed` that posts the counted
+  lines into a staging location.
 - **`putaway`** owns the floor operation: which pallets are work, the operation a Warehouseman starts
   and confirms, the destination, the actor, the permission, and the orchestration of the moves. It
   references pallets by id and never touches their tables.
@@ -125,9 +136,10 @@ Two new app modules and one subscriber, over the installed WMS:
 |---|---|---|
 | A new `pallets` module owns the carrier | Keep in `pz`; move into `wms`; let `putaway` own it | `pz` is the document the carrier must outlive; installed `wms` entities are not app-editable and have no extension points for entities (ADR-0004); `putaway` would invert the dependency, since a pallet exists long before any putaway. Settled on #50. |
 | A separate `putaway` module owns the operation | `pallets` owns carrier and operation | User decision. The carrier registry stays answerable to "what and where"; floor work, permissions and orchestration live apart, leaving room for picking and replenishment later. |
-| `PalletPlacement` is one append-only table serving both `receive` and `putaway` | A separate execution table per operation | Two operations land in this spec; one seam with two callers is a real seam. One table also makes "current location" a single ordered read instead of a union. |
+| `PalletPlacement` is one append-only table serving both `receive` and `putaway` | A separate execution table per operation | Two operations land in this spec; one seam with two callers is a real seam. One table also makes the last known location a single ordered read instead of a union. |
 | `PalletPlacement.id` is the `referenceId` passed to `wms` | `referenceId` = goods-receipt id (ADR-0005's suggested recipe), or the pallet code | `inventoryMoveSchema` requires a uuid `referenceId`, so a pallet code is impossible (`validators.ts:277-293`). Worse, `buildMovementIdempotencyKey` joins reference + type + locations + variant + **quantity** (`lib/inventoryIdempotency.ts:12-37`): two pallets holding the same variant and quantity in the same location under one document-level reference would produce an identical key, and the second posting would be silently swallowed as a replay. A per-placement uuid is the only reference that cannot collide. |
-| Current location is computed from confirmed placements | Store `currentLocationId` on the pallet | #50's decision, and the honest one: a stored column drifts from the ledger, and a multi-product pallet split across a partial putaway has no single location to store. |
+| Current location is computed from confirmed placements | Store `currentLocationId` on the pallet | #50's decision, and the honest one: a stored column drifts from the ledger, and a multi-product pallet split across a partial putaway has no single location to store. Integrity is tracked separately so drift is visible instead of hidden. |
+| Every pallet movement crosses a `pallets` command boundary | Let callers invoke `wms.inventory.move` directly | WMS movements carry no `palletId`, so a direct movement cannot be assigned safely to one carrier. The facade supplies the placement reference; reconciliation fails closed when an unrecognised movement touches a tracked variant/location. |
 | Awaiting putaway = the line's current location has `type = 'staging'` | A boolean flag, a status, or a hardcoded `STG-RECV` | #50 forbids inferring from `posted` or from a location name. `type` is a first-class filter on the installed contract (`wms/api/locations/route.ts:30, :74`). |
 | Posting is a subscriber owned by `pallets` | A subscriber inside `pz`; a third module | ADR-0005 designed the seam this way — "adding a subscriber… without touching this module". `pallets` is the optional consumer that needs the goods in the ledger, and it is the module that owns placements. |
 | Panel screens live in `warehouseman` | Screens inside `putaway` | Matches the existing layout exactly: every panel screen lives in `warehouseman` and calls another module's API (`src/modules/warehouseman/lib/receivingApi.ts`). Avoids a new cross-module component-import direction. |
@@ -140,8 +152,9 @@ Two new app modules and one subscriber, over the installed WMS:
 | Pallet | A carrier goods are counted onto, identified by its own barcode, with its own contents, location and history. It is created on a Goods Receipt and outlives it. | `pallets:pallet` | — |
 | Pallet Line | One product and its counted quantity on one Pallet; one row per product per pallet. | `pallets:pallet_line` | unique `(pallet_id, catalog_variant_id)` |
 | Placement | A statement that a pallet line's goods were put into, or moved to, a location in the ledger. Carries its own outcome; only a `confirmed` placement is a fact. | `pallets:pallet_placement` | outcome `pending`/`unknown` is never read as a location |
-| Current Location | The `toLocationId` of a pallet line's latest `confirmed` placement, ordered by `performedAt`. A pallet with lines in different locations has no single current location. | computed | no confirmed placement → the line has no location and is not work |
-| Awaiting Putaway | A pallet line whose current location has `type = 'staging'`, on a pallet that is `closed` and has no unresolved placement. | computed | ambiguity is resolved by excluding, never by guessing |
+| Current Location | The `toLocationId` of a pallet line's latest `confirmed` placement, ordered by `performedAt` and placement id as a deterministic tie-break. This is actionable only while integrity is `trusted`. A pallet with lines in different locations has no single current location. | computed | no confirmed placement or `drifted` integrity → no actionable location and no work |
+| Location Integrity | `trusted` means all observed movements touching the tracked variant/location are recognised by a placement reference; `drifted` means an unrecognised movement was observed. | `pallet_line.location_integrity` plus reconciliation evidence | `drifted` blocks putaway and requires reconciliation; never silently reassigns stock |
+| Awaiting Putaway | A pallet line whose current location has `type = 'staging'`, whose integrity is `trusted`, on a pallet that is `closed` and has no unresolved placement. | computed | ambiguity or drift is resolved by excluding, never by guessing |
 | Putaway | The operation that moves a received pallet's goods from a staging location to a storage location within one warehouse. | `putaway:putaway_operation` | — |
 | Putaway Work | The list of pallets awaiting putaway in a warehouse. Work, not an inventory of pallets. | computed | — |
 | Close | Unchanged: the reversible act by which a Warehouseman declares a Pallet counted. | `pallets.pallets.close` | reopen refused once the source document is confirmed |
@@ -172,7 +185,7 @@ back door.
 
 | Capability | Reuse / extend / app-own | Existing module or new module | Integration seam | Why |
 |---|---|---|---|---|
-| Quantity ledger, balances, movements | reuse | installed `wms` | `wms.inventory.receive` / `wms.inventory.move` commands | the only quantity ledger; #50 forbids a second one |
+| Quantity ledger, balances, movements | reuse | installed `wms` | called only through the `pallets` movement facade | the only quantity ledger; #50 forbids a second one and the facade preserves pallet lineage |
 | Locations and their `type` | reuse | installed `wms` | `GET /api/wms/locations?type=staging` | first-class filter, already supported |
 | Warehouse | reuse | installed `wms` | scalar `warehouseId` + snapshot | ADR-0004 |
 | Product identity | reuse | installed `catalog` | scalar `catalogVariantId` + snapshot | ADR-0007 |
@@ -192,7 +205,8 @@ office confirms PZ
         -> [pallets] subscriber
              -> resolve staging location (wms locations, type=staging, warehouse of the document)
              -> pallets.placements.plan      (kind=receive, one row per pallet line, frozen)
-             -> pallets.placements.execute   (wms.inventory.receive, referenceId = placement.id)
+             -> pallets.placements.execute   (pallets movement facade -> wms.inventory.receive,
+                                              referenceId = placement.id)
                                              -> confirmed | rejected | unknown
 
 floor puts a pallet away
@@ -201,22 +215,25 @@ floor puts a pallet away
                             -> freezes lines
                      -> POST /api/putaway/operations/confirm (putaway.operations.confirm)
                             -> pallets.placements.plan    (kind=putaway, from -> to)
-                            -> pallets.placements.execute (wms.inventory.move, type=putaway)
+                            -> pallets.placements.execute (pallets movement facade ->
+                                                            wms.inventory.move, type=putaway)
                             -> per-line outcome -> operation status
                      -> POST /api/putaway/operations/retry  (unresolved lines only)
 
 reads
   GET /api/pallets/by-code        -> carrier + contents + computed location + history
-  GET /api/putaway/work           -> pallets awaiting putaway in a warehouse
+  GET /api/putaway/work           -> trusted pallets awaiting putaway in a warehouse
 ```
 
-- **Module boundaries:** `pallets` owns one invariant — the carrier and the truthful record of where
-  its goods are. `putaway` owns another — the floor operation and who may perform it. They are
+- **Module boundaries:** `pallets` owns one invariant — the carrier and the controlled, last-known
+  location of each line. `putaway` owns another — the floor operation and who may perform it. They are
   separate modules because a carrier exists without any operation and outlives every one of them; they
   are not merged because nothing requires them to be transactionally consistent: a placement is
   committed by the ledger, and the operation reflects placements rather than owning them.
 - **Extension points:** the installed `wms` is used only through its published commands and read APIs;
-  nothing installed is modified. The panel entry point is a new tile in `PanelHome`'s `ACTIONS` data
+  nothing installed is modified. The app-level contract is stricter: generic WMS movement routes are
+  not a supported path for tracked pallet goods, and the `pallets` facade is the only writer for those
+  goods. The panel entry point is a new tile in `PanelHome`'s `ACTIONS` data
   (`src/modules/warehouseman/components/PanelHome.tsx:13-18`), not a new shell.
 - **Alternatives considered:** doing the whole thing as a `wms` extension (rejected: installed WMS
   entities are not app-editable and carry no pallet concept — `InventoryMovement` has no pallet field,
@@ -228,15 +245,17 @@ reads
 
 ### Journey J-001 — A confirmed delivery becomes stock a pallet carries
 The office confirms a released Goods Receipt. Every closed pallet's lines are posted into the
-warehouse's staging location, one movement per pallet line. The pallet now answers "what is on me"
-and "where am I" and appears as putaway work. Covers REQ-003, REQ-004.
+warehouse's staging location, one movement per pallet line. The pallet now answers "what is on me" and "where was this line last confirmed"; it appears as putaway
+work only while its location integrity is trusted. Covers REQ-003, REQ-004.
 
 ### Journey J-002 — A Warehouseman puts a pallet away
-From the panel home, "Do odłożenia". The list shows pallets waiting in a staging location in their
-Assigned Warehouse. Scan the pallet code: its code, source document, contents with quantities and
-units, and current source location appear. Scan the source location and it is checked against the
-recorded one. Scan the destination and it is checked for the same warehouse and scope, active, and
-different from the source. A summary reads "Paleta P: PRZYJĘCIA → A-01" with products and quantities.
+From the panel home, "Do odłożenia". The list shows trusted pallets whose lines are waiting in a
+staging location in their Assigned Warehouse. Scan the pallet code: its code, source document,
+contents with quantities and units, last known source location and integrity appear. A drifted line
+is shown as requiring reconciliation and cannot enter confirmation. Scan the source location and it
+is checked against the recorded one. Scan the destination and it is checked for the same warehouse
+and scope, active, and different from the source. A summary reads "Paleta P: PRZYJĘCIA → A-01" with
+products and quantities.
 "Potwierdź odłożenie" issues the moves. Each line shows its own result, and the pallet is reported
 put away only when every required line is confirmed. Covers REQ-005 … REQ-009, REQ-011.
 
@@ -248,7 +267,7 @@ Covers REQ-008, REQ-010.
 
 ### Journey J-004 — The document closes, the pallet lives on
 The Goods Receipt is confirmed and later archived. Scanning the pallet still returns its identity,
-contents, current location and full history, including the document it came from. Covers REQ-001,
+contents, last known location, integrity state and full history, including the document it came from. Covers REQ-001,
 REQ-012.
 
 ## UI and Interaction Contracts
@@ -341,10 +360,12 @@ Hard-deleted only while `open` and empty, as today (`src/modules/pz/data/entitie
 
 ### `pallets:pallet_line` — table `pallets_pallet_lines`
 
-Unchanged in shape from `pz_pallet_lines` (`src/modules/pz/data/entities.ts:251-298`): in-module
-ManyToOne `pallet_id`, scope columns, `catalog_variant_id`, `catalog_product_id`, `catalog_snapshot`
-jsonb, `quantity` numeric(18,4) as a string and always `> 0`, timestamps, unique
-`(pallet_id, catalog_variant_id)`.
+Based on `pz_pallet_lines` (`src/modules/pz/data/entities.ts:251-298`): in-module ManyToOne
+`pallet_id`, scope columns, `catalog_variant_id`, `catalog_product_id`, `catalog_snapshot` jsonb,
+`quantity` numeric(18,4) as a string and always `> 0`, timestamps, unique
+`(pallet_id, catalog_variant_id)`, plus `location_integrity` (`trusted` | `drifted`) and
+`integrity_checked_at`. The integrity fields are derived by reconciliation, never accepted from a
+client, and do not replace the placement history.
 
 ### `pallets:pallet_placement` — table `pallets_pallet_placements`
 
@@ -362,7 +383,7 @@ jsonb, `quantity` numeric(18,4) as a string and always `> 0`, timestamps, unique
 | `kind` | `receive` \| `putaway` | index | no | immutable |
 | `outcome` | `pending` \| `confirmed` \| `rejected` \| `unknown` | index `(outcome)` | no | `pending → confirmed \| rejected \| unknown`; `unknown → confirmed \| rejected` after read-back; a `confirmed` row is final |
 | `movement_id` | UUID, nullable | unique where not null | no | set only with `confirmed`; the unique index makes double-recording impossible |
-| `performed_at` | timestamp, nullable | index `(pallet_line_id, performed_at desc)` | no | copied from the ledger movement, not from the app clock |
+| `performed_at` | timestamp, nullable | index `(pallet_line_id, performed_at desc, id desc)` | no | copied from the ledger movement, not from the app clock; placement id breaks timestamp ties |
 | `requested_by` | UUID, required | — | no | the acting user; for the subscriber, the confirming user carried on the event |
 | `source_operation_id` | UUID, nullable | index | no | scalar id of the `putaway` operation that requested it; null for `receive` |
 | `attempt_count` | int, required | — | no | incremented per attempt |
@@ -371,7 +392,8 @@ jsonb, `quantity` numeric(18,4) as a string and always `> 0`, timestamps, unique
 
 Rows are never deleted and their frozen fields are never rewritten; only `outcome`, `movement_id`,
 `performed_at`, `attempt_count` and the error fields resolve. Current location of a pallet line is the
-`to_location_id` of its latest `confirmed` row by `performed_at`.
+`to_location_id` of its latest `confirmed` row by `performed_at, id`, and is actionable only while
+the line's `location_integrity` is `trusted`.
 
 ### `putaway:putaway_operation` — table `putaway_putaway_operations`
 
@@ -411,7 +433,9 @@ because no environment holds pallets worth keeping — fixtures are re-seeded.
 | `POST` | `/api/pallets/close`, `/reopen` | auth + `pallets.count` | `{ id, version }` | updated carrier | 409 conflict, 422 document confirmed | REQ-002 |
 | command | `pallets.placements.plan` | internal; callers gate | `{ palletId, kind, toLocationId, fromLocationId?, requestedBy }` | frozen `pending` rows | 409 when an unresolved placement exists for a line | REQ-003, REQ-007, REQ-010 |
 | command | `pallets.placements.execute` | internal | `{ placementIds }` | per-row outcome | never advances a row past `unknown` without a read-back | REQ-007, REQ-008, REQ-010 |
-| command | `pallets.placements.reconcile` | internal | `{ placementIds }` | resolved outcomes | reads `GET /api/wms/inventory/movements?referenceType=manual&referenceId=…` | REQ-010 |
+| command | `pallets.placements.reconcile` | internal | `{ placementIds }` | resolved outcomes | reads WMS movements by placement reference; never writes again while outcome is `unknown` | REQ-010 |
+| command | `pallets.integrity.reconcile` | internal; triggered by WMS movement event or operator | `{ warehouseId, palletIds?, since? }` | trusted/drifted state per affected line | scans movements touching tracked variant/location; an unrecognised reference marks lines `drifted` and blocks work | REQ-014 |
+| command | `pallets.inventory.receive` / `pallets.inventory.move` | internal; only pallet movement writer | frozen placement payload | WMS movement with `referenceId = placement.id` | rejects caller payloads without a placement; scope, location and variant are rechecked | REQ-003, REQ-007, REQ-014 |
 | `GET` | `/api/putaway/work` | auth + `putaway.execute` | `warehouseId` | pallets awaiting putaway with contents and source location | 403 | REQ-005 |
 | `PUT` | `/api/putaway/operations` | auth + `putaway.execute` | `{ palletId }` | operation with frozen lines | 409 an operation is already open for this pallet; 422 pallet not awaiting putaway | REQ-006, REQ-009, REQ-011 |
 | `POST` | `/api/putaway/operations/confirm` | auth + `putaway.execute` | `{ id, version, fromLocationId, toLocationId }` | per-line outcomes + operation status | 400 missing version, 409 version conflict, 422 `invalid_location` / same source and destination / inactive / foreign warehouse, 409 `insufficient_stock` | REQ-007, REQ-009, REQ-011 |
@@ -426,6 +450,9 @@ rule `pz` already applies (`src/modules/pz/commands/pallets.ts:95-107`).
 
 The installed calls this spec makes:
 
+The facade is the only pallet-aware writer. It calls the installed commands with frozen placement data,
+then records the returned movement id. A caller cannot supply a WMS payload without a placement.
+
 - `wms.inventory.receive` — `{ warehouseId, locationId, catalogVariantId, quantity, referenceType: 'manual', referenceId: placement.id, performedBy, reason }`. `type` is hard-coded `'receipt'` upstream (`inventory-actions.ts:1459`).
 - `wms.inventory.move` — the same plus `fromLocationId`, `toLocationId` and **`type: 'putaway'` passed explicitly**, because the command defaults to `'transfer'` (`inventory-actions.ts:1604`). `quantity` is a positive number, not a decimal string (`validators.ts:277-293`), so the app's `numeric(18,4)` strings are converted at the edge and the conversion is covered by a test.
 
@@ -437,7 +464,7 @@ The installed calls this spec makes:
 | `pallets.placement.confirmed` | `pallets` | none yet | — | persistent; the seam a future reporting or notification consumer attaches to |
 | `pallets.placement.unresolved` | `pallets` | none yet | — | emitted when a placement lands `unknown`; the observability hook for operations |
 | `putaway.operation.completed` | `putaway` | none yet | — | persistent, carries pallet id and destination |
-| `wms.inventory.moved` | installed `wms` | none | — | already emitted by the installed command; not consumed here |
+| `wms.inventory.moved` | installed `wms` | **new** `pallets` reconciliation subscriber | invoke `pallets.integrity.reconcile`; compare `referenceId` with known placements and mark affected lines `drifted` when a tracked variant/location has an unrecognised movement | never guesses ownership; putaway work is blocked until controlled reconciliation |
 
 There is no scheduled job in this slice. Reconciliation of `unknown` placements is user-triggered
 (retry) and idempotent; a scheduled sweeper is deliberately deferred, and the `pallets.placement.unresolved`
@@ -455,6 +482,11 @@ event is what a later sweeper would hang off.
   a cross-tenant read.
 - **Sensitive data:** none. No PII, no credentials, no free text about people; `label` is an operator
   note about a pallet, and error messages carry the ledger's refusal, never a stack trace.
+- **Movement boundary:** all receive and putaway writes for tracked pallet goods go through the
+  `pallets` facade and carry a placement reference. Generic WMS movement APIs remain available for
+  untracked stock, but are outside the pallet contract. Because WMS has no pallet id, reconciliation
+  treats an unrecognised movement for a tracked variant/location as drift and blocks the affected
+  lines rather than assigning it to a carrier.
 - **Abuse and failure modes:** replay is bounded by the installed idempotency key plus the app's own
   unique `movement_id`; enumeration is bounded because listing requires a parent filter (the rule
   `src/modules/pz/api/pallets/route.ts:21-34` already states); concurrency is bounded by the partial
@@ -488,6 +520,7 @@ UI states are exercised through the panel routes.
 | TEST-014 | integration | pallet whose document is confirmed and archived | read the pallet by code | identity, contents, location and history still resolve | REQ-001, REQ-012 |
 | TEST-015 | UI | posted pallet, Warehouseman session | walk the panel flow | loading, empty, error, conflict and partial states render; HID Enter submits; focus returns to the scan field; PL and EN; narrow width; light and dark | REQ-005, REQ-006, REQ-008 |
 | TEST-016 | integration | existing receiving flow | run the current `pz` receiving integration suite against the relocated carrier | TC-PZ-001…006 still pass unchanged in behavior | REQ-002 |
+| TEST-017 | integration/security | trusted pallet in staging plus a direct generic WMS movement for its variant/location | reconcile movements, then request putaway work | the line is marked `drifted`, excluded from work, and cannot be moved until a controlled reconciliation clears it; no guessed pallet assignment is made | REQ-004, REQ-014 |
 
 ## Implementation Phases
 
@@ -523,19 +556,21 @@ UI states are exercised through the panel routes.
 - **Why this order / value delivered:** without this, no pallet exists in the ledger and putaway has
   nothing to move. Value on its own: stock finally reflects what the floor counted.
 - **Deliverables:** `pallets:pallet_placement` + migration; `pallets.placements.{plan,execute,reconcile}`;
-  the `pz.goods_receipt.confirmed` subscriber owned by `pallets`; staging-location resolution by
-  `type` with an explicit ambiguity refusal; `pallets.placement.{confirmed,unresolved}` events;
+  `pallets.inventory.{receive,move}` as the only pallet movement facade; `pallets.integrity.reconcile`;
+  the `pz.goods_receipt.confirmed` subscriber owned by `pallets`; reconciliation of `wms.inventory.moved`; staging-location resolution
+  by `type` with an explicit ambiguity refusal; `pallets.placement.{confirmed,unresolved}` events;
   `GET /api/pallets/{id}/history`. **ADR-0014**, which records that a confirmed Goods Receipt now
   posts stock and corrects ADR-0005's `referenceId` recipe, ships with this specification.
 - **Independent slices / estimated commits:** (a) entity + migration, (b) plan/execute/reconcile,
   (c) subscriber + staging resolution, (d) history API.
 - **Requirements closed:** REQ-003, REQ-004 (computation half), REQ-010 (mechanism), REQ-012
-- **Tests:** TEST-001, TEST-002, TEST-003, TEST-011
+- **Tests:** TEST-001, TEST-002, TEST-003, TEST-011, TEST-017
 - **Validation:** `yarn generate`, `yarn typecheck`, `yarn test`, `yarn test:integration:ephemeral`
   for the posting paths
 - **Exit gate:** confirming the fixture PZ produces balances in `STG-RECV` and `confirmed` placements
   with movement ids; replaying the event produces no second movement; an ambiguous warehouse refuses
-  with no partial posting.
+  with no partial posting; an unrecognised WMS movement marks affected lines `drifted` and removes
+  them from putaway work.
 
 ### Phase 3 — Putaway work and execution (API)
 
@@ -597,6 +632,7 @@ UI states are exercised through the panel routes.
 | REQ-011 | J-002 | refusal codes on confirm | Phase 3 | TEST-008, TEST-009 | AC-009 |
 | REQ-012 | J-004 | `GET /api/pallets/{id}/history` | Phase 2, 4 | TEST-014, TEST-015 | AC-010 |
 | REQ-013 | J-004 | `pz` withdraw guard | Phase 3 | TEST-013 | AC-009 |
+| REQ-014 | J-001, J-002 | `pallets` movement facade, `pallets.integrity.reconcile`, `wms.inventory.moved` subscriber, `location_integrity` | Phase 2–3 | TEST-017 | AC-011 |
 
 ## Rollout, Migration, and Rollback
 
@@ -636,6 +672,7 @@ UI states are exercised through the panel routes.
 |---|---|---|---|
 | The installed idempotency key includes quantity, so a document-level reference would silently swallow a second identical posting | lost stock, invisible | per-placement uuid references; TEST-007 proves two identical pallets move independently | none known |
 | A move commits but the app never records the outcome | double movement on retry | `unknown` outcome plus mandatory read-back by `referenceId` before any further write; TEST-011 | a read-back that itself fails leaves the line `unknown` and visible, not silently retried |
+| A generic WMS movement changes stock without a pallet reference | false pallet location and unsafe putaway | only the `pallets` facade may move tracked goods; `wms.inventory.moved` reconciliation marks affected lines `drifted` and blocks work; TEST-017 | a shared SKU/location can produce a conservative false positive, which requires operator reconciliation rather than an unsafe guess |
 | `quantityAvailable` subtracts reserved and allocated, so reserved stock blocks a putaway (`inventory-actions.ts:1643-1645`) | a legitimate putaway is refused | the refusal is surfaced verbatim to the floor; TEST-009 | accepted: the ledger's rule wins |
 | A warehouse with zero or several active staging locations | posting cannot choose | explicit `staging_location_ambiguous` refusal, no partial posting; TEST-003 | operational configuration, deliberately not automated |
 | Two new modules plus a subscriber widen the module graph | more seams to keep honest | no cross-module ORM anywhere; reads by id through the query engine; writes through commands | accepted |
@@ -665,6 +702,10 @@ UI states are exercised through the panel routes.
       in the operator's language.
 - [ ] **AC-010** — From a pallet code a user reaches its source document, its operations, its movements
       and their actors and times.
+- [ ] **AC-011** — A direct generic WMS movement touching a tracked pallet variant/location never gets
+      attributed to a pallet. Reconciliation marks the affected line `drifted`, excludes it from
+      putaway work, and putaway remains blocked until a controlled reconciliation records the actual
+      placement or otherwise resolves the discrepancy.
 - [ ] Every listed surface matches its recorded reference and uses the canonical panel shell and
       components, shared API helpers, semantic tokens, and complete loading, empty, error, conflict,
       keyboard, accessibility, responsive, light-mode and dark-mode states.
@@ -676,7 +717,7 @@ UI states are exercised through the panel routes.
 | Check | Status | Evidence / resolution |
 |---|---|---|
 | Applicable `AGENTS.md` files and routed guides/skills reviewed | pass | root `AGENTS.md`, `.ai/guides/spec-delivery.md`, `.ai/guides/contracts.md`, `om-spec-writing`, research file §6–§7 |
-| Data models, APIs, events, UI, and tests are internally consistent | pass | Requirement Traceability maps all 13 requirements to phases, tests and acceptance criteria |
+| Data models, APIs, events, UI, and tests are internally consistent | pass | Requirement Traceability maps all 14 requirements to phases, tests and acceptance criteria |
 | Every workflow completes end to end without a catch-all integration phase | pass | each phase closes its own requirements and carries its own exit gate; Phase 4 adds no deferred backend behavior |
 | Platform-native reuse and extension points were chosen before custom code | pass | Reuse and Ownership Map; the installed WMS is the only ledger and is used through published commands |
 | UI contracts identify references, canonical components, and theme/state coverage | pass | UI table records the panel reference for each surface and the recorded panel-primitive exception |
@@ -698,6 +739,7 @@ in Phase 1.** Status becomes `Ready for implementation` on that approval.
 | Q-006 | Dependency on stock posting (#54 / #45) | user | yes | **Absorbed**: this spec lands the minimal posting slice as Phase 2 (2026-09-19) |
 | Q-007 | Do the placement rows for a putaway belong to `pallets` or to `putaway`? | user | no | Proposed: `pallets` owns them, `putaway` owns the operation that requests them. Reversible; raise it in review if the boundary should sit elsewhere. |
 | Q-008 | `docs/adr/` has two files numbered 0012 | user | no | New ADRs take 0013 and 0014; the collision is left for a separate housekeeping change |
+| Q-009 | How can a pallet location remain safe when WMS movements have no `palletId`? | user | yes | **Controlled movement facade plus fail-closed drift detection** — all pallet movements use a placement reference; an unrecognised WMS movement marks affected lines `drifted` and blocks putaway until reconciliation (2026-09-19) |
 
 ## Changelog
 
@@ -705,3 +747,4 @@ in Phase 1.** Status becomes `Ready for implementation` on that approval.
 |---|---|
 | 2026-09-19 | Initial skeleton and Open Questions gate |
 | 2026-09-19 | Gate answered; full draft written against `.ai/research/2026-09-19-pallet-putaway-50.md` |
+| 2026-09-19 | Added controlled pallet movement facade, WMS movement reconciliation, per-line integrity state, drift blocking and TEST-017/AC-011; resolved Q-009 |

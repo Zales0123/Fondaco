@@ -82,8 +82,10 @@ quantities cannot move while they are being counted against.
 _Avoid_: Start receiving, publish, send to warehouse, dispatch
 
 **Pallet**:
-A carrier goods are counted onto, identified by its own barcode, with its own contents, location
-and history. It is created on a Goods Receipt and outlives it.
+A carrier goods are counted onto, identified by its own barcode, with its own contents, last known
+location, integrity state and history. Its location is trusted only when all movements are recorded
+through the pallet movement boundary; an unrecognised stock movement marks the line as drifted. It is
+created on a Goods Receipt and outlives it.
 _Avoid_: Palette, unit, handling unit, container, LPN
 
 **Pallet Line**:

@@ -34,8 +34,11 @@ avoid list: the glossary's ban on those words was never the problem. The clause 
 - `pz_pallets` and `pz_pallet_lines` are replaced by `pallets_pallets` and `pallets_pallet_lines`.
   The entity ids `pz:pallet` / `pz:pallet_line` and the `/api/pz/pallets*` routes are frozen surfaces,
   so they keep working through deprecated forwarders for one release.
-- A pallet's current location is a computed read, never a column. Code that wants it asks the
-  `pallets` module rather than joining to the ledger itself.
+- A pallet line's last known location is a computed read from confirmed placements, never a stored
+  location column. Code that wants it asks the `pallets` module rather than joining to the ledger
+  itself. Because WMS movements have no `palletId`, all pallet movements use the `pallets` facade and
+  a placement reference; an unrecognised movement marks the line `drifted` and blocks putaway until
+  reconciliation instead of being assigned by guesswork.
 - ADR-0009 still holds — actual counts live on pallets and never touch goods receipt lines — but its
   premise is no longer "per document": counts live on a carrier that the document merely started.
 - A pallet that is never put away simply stays where the ledger says it is. Nothing expires it, and

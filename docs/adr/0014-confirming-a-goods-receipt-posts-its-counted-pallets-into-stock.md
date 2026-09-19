@@ -24,6 +24,12 @@ question and we would rather see it than paper over it. Posting per pallet line 
 document line follows ADR-0009: the counted quantity lives on the pallet, and it is the pallet that
 will be moved next.
 
+The posting is executed through the `pallets` movement facade, which creates the placement before
+calling `wms.inventory.receive` and uses that placement id as the movement reference. The installed
+WMS does not carry a pallet id. Therefore a later generic WMS movement touching a tracked
+variant/location cannot be safely attributed to a carrier; the reconciliation subscriber marks the
+affected pallet lines `drifted` and blocks putaway until an operator resolves the discrepancy.
+
 The alternative of putting the subscriber inside `pz` was rejected because it is precisely what
 ADR-0005 designed against: the document module stays a record of what arrived. The alternative of a
 third module purely for posting was rejected because the record of where a carrier's goods are is the
