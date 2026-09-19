@@ -42,7 +42,21 @@ export const setup: ModuleSetupConfig = {
     // Receiving lives in `pz`, so the floor's grants are `pz.*` features: read the released
     // documents and count onto their pallets. Deliberately not `pz.goodsReceipts.manage` —
     // the floor counts a delivery, it does not edit the paperwork it is counted against.
-    [WAREHOUSEMAN_ROLE]: ['warehouseman.panel.access', 'pz.goodsReceipts.view', 'pz.receiving.count'],
+    //
+    // The two read-only grants that follow are what the counting screens actually resolve
+    // their pickers against, and `pz/acl.ts` already declares both as dependencies of the
+    // features above. Without `wms.view` the control that widens to another Warehouse has no
+    // option source; without `catalog.products.view` the fallback for an unrecognised barcode
+    // opens a picker with nothing in it, which is the one recovery path a Warehouseman has
+    // when the catalog does not know the code in front of them. Both degrade to an empty list
+    // rather than an error, so the failure would be silent.
+    [WAREHOUSEMAN_ROLE]: [
+      'warehouseman.panel.access',
+      'pz.goodsReceipts.view',
+      'pz.receiving.count',
+      'wms.view',
+      'catalog.products.view',
+    ],
   },
 
   async onTenantCreated({ em, tenantId }) {
