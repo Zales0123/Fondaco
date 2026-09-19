@@ -29,3 +29,41 @@ _Avoid_: Default warehouse, home warehouse, warehouse membership
 A Panel screen that names an operation the Panel will eventually perform and performs
 none of it.
 _Avoid_: Placeholder, mock, dummy page
+
+## Goods Receipts
+
+**Goods Receipt**:
+A warehouse document recording a delivery that arrived from outside the organization.
+Users know it by its Polish name, _Przyjęcie Zewnętrzne_ (PZ); code and identifiers use
+the English term.
+_Avoid_: Delivery, intake, GRN, inbound, receipt (bare)
+
+**Line**:
+A single product and quantity on a Goods Receipt. Two Lines may name the same product;
+a Line is a line on a document, not a per-product total.
+_Avoid_: Position, pozycja, item, row
+
+**Supplier**:
+The external party a delivery came from. A name, not a record — the app holds no
+supplier entity.
+_Avoid_: Vendor, seller, counterparty, source
+
+**Document Number**:
+The identifier a Goods Receipt is known by, supplied by the person entering it rather
+than generated. Unique within an Organization.
+_Avoid_: Reference, code, ID
+
+**Document Date**:
+The day a Goods Receipt is dated, which is the day the delivery was received. A single
+date; the app does not distinguish paperwork date from arrival date.
+_Avoid_: Receipt date, delivery date, entry date
+
+**Confirm**:
+The one-way act of finalizing a Goods Receipt, after which it can no longer be changed.
+Confirming records that a delivery happened; it does not move stock.
+_Avoid_: Post, approve, submit, finalize, close
+
+**Draft**:
+A Goods Receipt that has been entered but not yet confirmed. The only state in which it
+can be edited or deleted.
+_Avoid_: Pending, open, unposted, new
