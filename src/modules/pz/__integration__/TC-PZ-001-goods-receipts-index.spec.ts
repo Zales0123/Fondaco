@@ -13,12 +13,21 @@ import { expect, test, type APIRequestContext } from '@playwright/test'
 const ADMIN = { email: 'admin@acme.com', password: 'secret' }
 const EMPLOYEE = { email: 'employee@acme.com', password: 'secret' }
 
-const INDEX_PATH = '/backend/pz/goods-receipts'
+const INDEX_PATH = '/backend/wms/goods-receipts'
 
 // The environment may serve Polish or English; match either rather than pinning the
 // assertion to whichever locale the run happens to resolve.
 const PAGE_TITLE = /Przyjęcia zewnętrzne|Goods Receipts/
 const EMPTY_TITLE = /Brak przyjęć zewnętrznych|No goods receipts yet/
+const LOAD_ERROR = /Nie udało się wczytać przyjęć zewnętrznych|Could not load goods receipts/
+const COLUMN_HEADERS = [
+  /Numer dokumentu|Document Number/,
+  /Data dokumentu|Document Date/,
+  /Dostawca|Supplier/,
+  /Magazyn|Warehouse/,
+  /Status/,
+  /Pozycje|Lines/,
+]
 const ACCESS_DENIED = /Access Denied|Odmowa dostępu|Brak dostępu/i
 
 async function login(request: APIRequestContext, email: string, password: string): Promise<void> {
@@ -33,10 +42,30 @@ async function login(request: APIRequestContext, email: string, password: string
 }
 
 test.describe('TC-PZ-001 goods receipts index', () => {
-  test('a user with the view feature reaches the index and sees the empty state', async ({ context, page }) => {
+  test('a user with the view feature reaches the index and its columns', async ({ context, page }) => {
     await login(context.request, ADMIN.email, ADMIN.password)
     await page.goto(INDEX_PATH)
     await expect(page.getByRole('heading', { name: PAGE_TITLE })).toBeVisible()
+    for (const column of COLUMN_HEADERS) {
+      await expect(page.getByRole('columnheader', { name: column })).toBeVisible()
+    }
+  })
+
+  /**
+   * The empty state is asserted against an empty response rather than an empty database:
+   * once goods receipts can be created, "the table happens to have no rows right now" is
+   * a property of the environment, not of the feature.
+   */
+  test('an index with nothing in it explains that no deliveries have been recorded', async ({ context, page }) => {
+    await login(context.request, ADMIN.email, ADMIN.password)
+    await page.route('**/api/pz/goods-receipts**', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ items: [], total: 0, page: 1, pageSize: 50, totalPages: 0 }),
+      }),
+    )
+    await page.goto(INDEX_PATH)
     await expect(page.getByText(EMPTY_TITLE)).toBeVisible()
   })
 
@@ -46,7 +75,17 @@ test.describe('TC-PZ-001 goods receipts index', () => {
     expect(allowed.status(), `list -> ${allowed.status()}: ${await allowed.text()}`).toBe(200)
     const body = (await allowed.json()) as { items?: unknown[]; total?: number }
     expect(Array.isArray(body.items)).toBeTruthy()
-    expect(body.items).toHaveLength(0)
+  })
+
+  test('a failed load says so instead of claiming there is nothing to show', async ({ context, page }) => {
+    await login(context.request, ADMIN.email, ADMIN.password)
+    await page.route('**/api/pz/goods-receipts**', (route) =>
+      route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"boom"}' }),
+    )
+    await page.goto(INDEX_PATH)
+    await expect(page.getByText(LOAD_ERROR)).toBeVisible()
+    // An empty table and an unreachable one must never look the same.
+    await expect(page.getByText(EMPTY_TITLE)).toHaveCount(0)
   })
 
   test('a user without the view feature is refused the page, the endpoint and the sidebar item', async ({ context, page }) => {
