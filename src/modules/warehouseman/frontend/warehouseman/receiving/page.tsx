@@ -1,12 +1,12 @@
 import { PanelShell } from '../../../components/PanelShell'
-import { StubAction } from '../../../components/StubAction'
+import { ReceivingDocuments } from '../../../components/ReceivingDocuments'
 import { loadPanelContext } from '../../../lib/panelContext'
 
 export default async function ReceivingPage() {
   const { userLabel, warehouse } = await loadPanelContext()
   return (
     <PanelShell userLabel={userLabel} warehouseName={warehouse?.name ?? null}>
-      <StubAction titleKey="warehouseman.actions.receiving" />
+      <ReceivingDocuments assignedWarehouseId={warehouse?.id ?? null} />
     </PanelShell>
   )
 }
