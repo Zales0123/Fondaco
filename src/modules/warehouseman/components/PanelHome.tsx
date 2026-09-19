@@ -7,6 +7,7 @@ import { cn } from '@open-mercato/shared/lib/utils'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { fetchReceivingDocuments, type ReceivingDocument } from '../lib/receivingApi'
 import { RECEIVING_LIST_HREF } from '../lib/receivingPanel'
+import { PanelInstallCard } from './PanelInstallCard'
 
 type PanelAction = { href: string; labelKey: string; Icon: LucideIcon; primary?: boolean }
 
@@ -27,34 +28,39 @@ export function PanelHome({ assignedWarehouseId }: { assignedWarehouseId: string
   const pending = data?.length ?? 0
 
   return (
-    <nav aria-label={t('warehouseman.panel.title')}>
-      <ul className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        {ACTIONS.map(({ href, labelKey, Icon, primary }) => (
-          <li key={href}>
-            <Link
-              href={href}
-              className={cn(
-                'flex h-44 flex-col justify-between rounded-lg border-2 border-border p-4 focus-visible:outline-none focus-visible:shadow-focus',
-                primary
-                  ? 'bg-primary text-primary-foreground hover:bg-primary-hover'
-                  : 'bg-card text-card-foreground hover:bg-accent hover:text-accent-foreground',
-              )}
-            >
-              <span className="flex items-start justify-between gap-2">
-                <Icon className="size-11" aria-hidden="true" />
-                {primary && pending > 0 ? (
-                  <span className="inline-flex h-9 min-w-9 items-center justify-center rounded-md border-2 border-border bg-card px-2 text-xl font-bold text-card-foreground">
-                    {pending}
-                    <span className="sr-only"> {t('warehouseman.panel.pendingDocuments')}</span>
-                  </span>
-                ) : null}
-              </span>
-              <span className="text-xl font-bold leading-tight">{t(labelKey)}</span>
-            </Link>
-          </li>
-        ))}
-      </ul>
-    </nav>
+    <>
+      <nav aria-label={t('warehouseman.panel.title')}>
+        <ul className="grid grid-cols-2 gap-4 md:grid-cols-4">
+          {ACTIONS.map(({ href, labelKey, Icon, primary }) => (
+            <li key={href}>
+              <Link
+                href={href}
+                className={cn(
+                  'flex h-44 flex-col justify-between rounded-lg border-2 border-border p-4 focus-visible:outline-none focus-visible:shadow-focus',
+                  primary
+                    ? 'bg-primary text-primary-foreground hover:bg-primary-hover'
+                    : 'bg-card text-card-foreground hover:bg-accent hover:text-accent-foreground',
+                )}
+              >
+                <span className="flex items-start justify-between gap-2">
+                  <Icon className="size-11" aria-hidden="true" />
+                  {primary && pending > 0 ? (
+                    <span className="inline-flex h-9 min-w-9 items-center justify-center rounded-md border-2 border-border bg-card px-2 text-xl font-bold text-card-foreground">
+                      {pending}
+                      <span className="sr-only"> {t('warehouseman.panel.pendingDocuments')}</span>
+                    </span>
+                  ) : null}
+                </span>
+                <span className="text-xl font-bold leading-tight">{t(labelKey)}</span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </nav>
+      {/* Below the tiles on purpose: the four actions are what a shift starts with, and
+          an install offer that pushes them down is an interruption, not an offer. */}
+      <PanelInstallCard />
+    </>
   )
 }
 

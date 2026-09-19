@@ -6,6 +6,9 @@ import { Button } from '@open-mercato/ui/primitives/button'
 import { IconButton } from '@open-mercato/ui/primitives/icon-button'
 import { Input } from '@open-mercato/ui/primitives/input'
 import { cn } from '@open-mercato/shared/lib/utils'
+import { PanelOfflineBanner } from './PanelOfflineBanner'
+import { PanelPwaHead } from './PanelPwaHead'
+import { PanelServiceWorker } from './PanelServiceWorker'
 
 /**
  * The panel's own layout vocabulary. Everything here is shadcn underneath — the panel
@@ -18,13 +21,22 @@ export const PANEL_ACTION = 'h-20 w-full text-xl font-semibold md:w-auto md:px-8
 /** The one action a screen exists for, always the last thing on the screen. */
 export const PANEL_PRIMARY = 'h-20 w-full border-2 text-xl font-bold md:w-auto md:px-10'
 
+/**
+ * Every panel screen is wrapped in this and nothing outside the panel is, which makes it
+ * the one place the PWA belongs: the manifest, the worker registration and the offline
+ * banner reach all six screens — the login page included, since that is where a
+ * home-screen launch lands once the shift's session has expired — without the shared app
+ * shell having to know this module exists.
+ */
 export function PanelSurface({ className, children }: { className?: string; children: React.ReactNode }) {
   return (
-    <div
-      data-om-panel="warehouseman"
-      className={cn('flex min-h-screen flex-col bg-background text-foreground', className)}
-    >
-      {children}
+    <div data-om-panel="warehouseman" className="flex min-h-screen flex-col bg-background text-foreground">
+      <PanelPwaHead />
+      <PanelServiceWorker />
+      <PanelOfflineBanner />
+      {/* The screen's own column. Separate from the one above it so the banner stays at
+          the top edge on the login screen too, which centres its children. */}
+      <div className={cn('flex flex-1 flex-col', className)}>{children}</div>
     </div>
   )
 }
