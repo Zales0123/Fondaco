@@ -1,0 +1,32 @@
+{
+  "id": "/warehouseman",
+  "name": "Fondaco — Warehouseman Panel",
+  "short_name": "Fondaco",
+  "description": "Goods receiving, scanning and stock work on the warehouse floor.",
+  "start_url": "/warehouseman",
+  "scope": "/warehouseman",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "categories": ["business", "productivity"],
+  "icons": [
+    {
+      "src": "/pwa/warehouseman/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa/warehouseman/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa/warehouseman/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

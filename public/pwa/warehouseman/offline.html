@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Fondaco</title>
+    <link rel="icon" href="/pwa/warehouseman/icon-192.png" />
+    <!--
+      Served by the service worker when a panel navigation cannot reach the server,
+      which is the one screen that has to work with nothing behind it. That rules out
+      a Next route, the design-system stylesheet and the i18n catalogues alike, so the
+      styling is inlined and the two languages the panel ships are both in the markup,
+      picked between by the script at the bottom. Keep it in step with the panel's
+      `pl.json`/`en.json` by hand — there is no mechanism that can do it here.
+    -->
+    <style>
+      :root {
+        color-scheme: light dark;
+        --background: #ffffff;
+        --foreground: #1a1a1a;
+        --muted: #737373;
+        --border: #e5e5e5;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --background: #1a1a1a;
+          --foreground: #fafafa;
+          --muted: #a3a3a3;
+          --border: #404040;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1.5rem;
+        padding: 2rem 1rem;
+        background: var(--background);
+        color: var(--foreground);
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        text-align: center;
+        -webkit-font-smoothing: antialiased;
+      }
+      .mark {
+        width: 5rem;
+        height: 5rem;
+        border-radius: 1.1rem;
+      }
+      h1 {
+        margin: 0;
+        font-size: 1.75rem;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+      p {
+        margin: 0;
+        max-width: 26rem;
+        font-size: 1.125rem;
+        line-height: 1.5;
+        color: var(--muted);
+      }
+      button {
+        /* The panel's own minimum target: 5rem tall, reachable with a glove on. */
+        min-height: 5rem;
+        width: 100%;
+        max-width: 26rem;
+        padding: 0 2rem;
+        border: 2px solid var(--foreground);
+        border-radius: 0.5rem;
+        background: var(--foreground);
+        color: var(--background);
+        font-family: inherit;
+        font-size: 1.25rem;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button:focus-visible {
+        outline: 3px solid var(--foreground);
+        outline-offset: 3px;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <img class="mark" src="/pwa/warehouseman/icon-192.png" alt="" />
+
+    <div lang="pl" data-lang="pl">
+      <h1>Brak połączenia</h1>
+      <p>Panel nie może połączyć się z serwerem. Sprawdź zasięg Wi-Fi i spróbuj ponownie.</p>
+    </div>
+    <div lang="en" data-lang="en" hidden>
+      <h1>No connection</h1>
+      <p>The panel cannot reach the server. Check the Wi-Fi signal and try again.</p>
+    </div>
+
+    <button type="button" id="retry" data-label-pl="Spróbuj ponownie" data-label-en="Try again">
+      Spróbuj ponownie
+    </button>
+
+    <script>
+      ;(function () {
+        // No session and no server, so the panel's resolved locale is out of reach.
+        // The device's own language is the best signal left, and Polish stays the
+        // default because that is the floor this panel was built for.
+        var english = (navigator.language || 'pl').toLowerCase().indexOf('pl') !== 0
+        var lang = english ? 'en' : 'pl'
+
+        document.documentElement.lang = lang
+        var blocks = document.querySelectorAll('[data-lang]')
+        for (var i = 0; i < blocks.length; i++) {
+          blocks[i].hidden = blocks[i].getAttribute('data-lang') !== lang
+        }
+
+        var retry = document.getElementById('retry')
+        retry.textContent = retry.getAttribute('data-label-' + lang)
+        retry.addEventListener('click', function () {
+          window.location.reload()
+        })
+
+        // Coming back into signal is the common case, and a warehouseman with full
+        // hands should not have to tap anything for it.
+        window.addEventListener('online', function () {
+          window.location.reload()
+        })
+      })()
+    </script>
+  </body>
+</html>
