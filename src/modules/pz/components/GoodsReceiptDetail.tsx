@@ -22,6 +22,7 @@ import { formatDisplayDate } from '@open-mercato/ui/primitives/date-format'
 import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
 import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/useOrganizationScope'
 import type { GoodsReceiptListItem } from '../lib/goodsReceiptListItem'
+import { DamageReportsSection } from './DamageReportsSection'
 import { PalletsSection } from './PalletsSection'
 import { ReceivingSummaryView, useReceivingSummary } from './ReceivingSummary'
 import {
@@ -206,6 +207,7 @@ export function GoodsReceiptDetail({ id }: { id: string }) {
       </section>
       <PalletsSection goodsReceiptId={item.id} />
       <ReceivingSummarySection goodsReceiptId={item.id} />
+      <DamageReportsSection goodsReceiptId={item.id} />
       {canConfirm && item.status === 'receiving' ? (
         <Button disabled={pending} onClick={() => { void handleTransition('confirm', item) }}>
           {t('pz.goodsReceipts.form.actions.confirm')}
