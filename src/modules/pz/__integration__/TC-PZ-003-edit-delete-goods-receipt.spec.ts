@@ -178,9 +178,13 @@ test.describe('TC-PZ-003 edit and delete draft goods receipts', () => {
       })
       expect(acl.status(), await acl.text()).toBeLessThan(400)
 
-      const organizations = await admin.get('/api/directory/organizations?pageSize=1')
-      const organizationId = ((await organizations.json()) as { items?: Array<{ id?: string }> }).items?.[0]?.id
-      expect(organizationId, 'no organization to attach the test colleague to').toBeTruthy()
+      // The colleague has to live in the organization the fixtures landed in, not whichever
+      // one happens to sort first: on a multi-organization app the wrong one cannot see
+      // the receipt and the test would fail for a reason that is not the subject.
+      const warehouse = await admin.get(`/api/wms/warehouses?ids=${encodeURIComponent(warehouseId)}&pageSize=1`)
+      const organizationId = ((await warehouse.json()) as { items?: Array<{ organization_id?: string }> })
+        .items?.[0]?.organization_id
+      expect(organizationId, 'could not resolve the organization that owns the fixtures').toBeTruthy()
       const colleagueEmail = `pz-editor-${RUN}@acme.com`
       const createdColleague = await admin.post('/api/auth/users', {
         data: {

@@ -21,7 +21,7 @@
   "pz.goodsReceipts.errors.linesRequired": "Add at least one line.",
   "pz.goodsReceipts.errors.notFound": "That goods receipt no longer exists.",
   "pz.goodsReceipts.errors.organizationRequired": "Organization context is required.",
-  "pz.goodsReceipts.errors.redoDocumentNumberTaken": "This Document Number has been used by another goods receipt since, so this one cannot be restored.",
+  "pz.goodsReceipts.errors.redoDocumentNumberTaken": "This Document Number has been used by another goods receipt since, so this one cannot be redone.",
   "pz.goodsReceipts.errors.redoStale": "This goods receipt has changed since that action was undone, so it cannot be redone.",
   "pz.goodsReceipts.errors.supplierRequired": "Supplier is required.",
   "pz.goodsReceipts.errors.supplierTooLong": "Supplier is too long.",

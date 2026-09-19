@@ -877,59 +877,83 @@ async function redoAggregateState(
   const scope = requireUndoScope(ctx, target, translate)
   const em = (ctx.container.resolve('em') as EntityManager).fork()
   let receipt!: GoodsReceipt
+  let redoneLines: GoodsReceiptLine[] = []
   let alreadyApplied = false
 
-  await withAtomicFlush(
-    em,
-    [
-      async () => {
-        receipt = assertFound(
-          await em.findOne(
-            GoodsReceipt,
-            {
-              id: target.id,
-              tenantId: scope.tenantId,
-              organizationId: scope.organizationId,
-            } as FilterQuery<GoodsReceipt>,
-            { lockMode: LockMode.PESSIMISTIC_WRITE },
-          ),
-          translate('pz.goodsReceipts.errors.notFound', 'That goods receipt no longer exists.'),
-        )
-        const lines = await findScopedLines(em, target.id, scope)
-        const inTargetState = options.deleted
-          ? receipt.deletedAt != null
-          : receipt.deletedAt == null && aggregateMatchesSnapshot(receipt, lines, target)
-        if (inTargetState) {
-          alreadyApplied = true
-          return
-        }
-        const undoneState = options.deleted ? receipt.deletedAt == null : receipt.deletedAt == null
-        if (!undoneState || !expected || !aggregateMatchesSnapshot(receipt, lines, expected)) {
-          throw conflict(
-            translate(
-              'pz.goodsReceipts.errors.redoStale',
-              'This goods receipt has changed since that action was undone, so it cannot be redone.',
+  try {
+    await withAtomicFlush(
+      em,
+      [
+        async () => {
+          receipt = assertFound(
+            await em.findOne(
+              GoodsReceipt,
+              {
+                id: target.id,
+                tenantId: scope.tenantId,
+                organizationId: scope.organizationId,
+              } as FilterQuery<GoodsReceipt>,
+              { lockMode: LockMode.PESSIMISTIC_WRITE },
             ),
+            translate('pz.goodsReceipts.errors.notFound', 'That goods receipt no longer exists.'),
           )
-        }
-        if (!options.deleted) for (const line of lines) em.remove(line)
-      },
-      () => {
-        if (alreadyApplied) return
-        if (options.deleted) {
-          const now = new Date()
-          receipt.deletedAt = now
-          receipt.updatedAt = now
+          const lines = await findScopedLines(em, target.id, scope)
+
+          // Redoing a delete never treats an already-deleted row as a quiet success: it
+          // could have been deleted by someone else in the meantime, and a no-op would
+          // still mint an undoable delete log — undoing which would restore THEIR deletion.
+          if (!options.deleted && receipt.deletedAt == null && aggregateMatchesSnapshot(receipt, lines, target)) {
+            alreadyApplied = true
+            return
+          }
+
+          if (receipt.deletedAt != null || !expected || !aggregateMatchesSnapshot(receipt, lines, expected)) {
+            throw conflict(
+              translate(
+                'pz.goodsReceipts.errors.redoStale',
+                'This goods receipt has changed since that action was undone, so it cannot be redone.',
+              ),
+            )
+          }
+          if (!options.deleted) for (const line of lines) em.remove(line)
+        },
+        () => {
+          if (alreadyApplied) return
+          if (options.deleted) {
+            const now = new Date()
+            receipt.deletedAt = now
+            receipt.updatedAt = now
+            em.persist(receipt)
+            return
+          }
+          restoreHeaderFromSnapshot(receipt, target)
           em.persist(receipt)
-          return
-        }
-        restoreHeaderFromSnapshot(receipt, target)
-        em.persist(receipt)
-        for (const line of target.lines) em.persist(createLineFromSnapshot(em, receipt, target, line))
-      },
-    ],
-    { transaction: true },
-  )
+          redoneLines = target.lines.map((line) => createLineFromSnapshot(em, receipt, target, line))
+          for (const line of redoneLines) em.persist(line)
+        },
+        () => {
+          if (alreadyApplied) return
+          // Recorded while the lock is still held: reloading after the commit could pick
+          // up another actor's lines and put them in this redo's log, so undoing the redo
+          // would overwrite their edit.
+          capturedAggregates.set(receipt, options.deleted ? target : serializeGoodsReceipt(receipt, redoneLines))
+        },
+      ],
+      { transaction: true },
+    )
+  } catch (error) {
+    // Undo freed the Document Number, and someone may legitimately have taken it before
+    // the redo. That is an answer the user can act on, not a write failure.
+    if (isUniqueViolation(error, DOCUMENT_NUMBER_UNIQUE_INDEX)) {
+      throw conflict(
+        translate(
+          'pz.goodsReceipts.errors.redoDocumentNumberTaken',
+          'This Document Number has been used by another goods receipt since, so this one cannot be redone.',
+        ),
+      )
+    }
+    throw error
+  }
 
   if (!alreadyApplied) {
     const dataEngine = ctx.container.resolve<DataEngine>('dataEngine')

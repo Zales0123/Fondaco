@@ -550,7 +550,11 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
     await hideDevDiagnostics(page)
 
     const documentNumberField = page.getByPlaceholder('PZ/1/2026')
+    // The form autofocuses its first field on mount; typing before that happens lets the
+    // hydrating controlled input reset what was typed.
+    await expect(documentNumberField).toBeFocused()
     await documentNumberField.fill(documentNumber)
+    await expect(documentNumberField).toHaveValue(documentNumber)
 
     // Keyboard order: every header control is reachable without a mouse.
     await documentNumberField.press('Tab')
