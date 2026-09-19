@@ -65,5 +65,6 @@ if (enterpriseModulesEnabled && enterpriseAgentsEnabled) {
   enabledModules.push({ id: 'agent_orchestrator', from: '@open-mercato/enterprise' })
 }
 
+enabledModules.push({ id: 'procurements', from: '@app' })
 enabledModules.push({ id: 'pz', from: '@app' })
 enabledModules.push({ id: 'warehouseman', from: '@app' })
