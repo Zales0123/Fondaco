@@ -283,6 +283,8 @@ scanner dialog in continuous mode:
   │ │          live camera preview           │ │ ← ring flashes per accepted scan
   │ └────────────────────────────────────────┘ │
   │ Skanuj dalej — aparat pozostaje włączony…  │
+  │ Ilość [        ]                           │
+  │ Następny skan doda 24                      │ ← ostrzegawczy, gdy mnożnik ustawiony
   │ Ostatnie skany                             │
   │  ✓ Kabel USB-C 2m +1 → 12                  │
   │  ✓ Kabel USB-C 2m +1 → 11                  │
@@ -315,6 +317,25 @@ scanner dialog in continuous mode:
   silently consumed either. A code that resolves to no variant closes the camera and hands over to
   the inline picker rather than scanning past it: the picker is on the screen behind the dialog and
   has to be read and tapped.
+- **Quantity while the camera is up:** the dialog is modal, so the counting screen's own quantity
+  field is behind it and unreachable — every camera scan would otherwise mean exactly one unit,
+  whatever the form said. The dialog therefore renders that same field itself. It is the same
+  state, not a copy: what is typed in the dialog is what `recordCount` reads, and the count that
+  consumes it clears it, so a multiplier never survives into the next scan. A failed count keeps
+  it, so a refused scan can be retried on the same terms rather than silently dropping to one.
+  The acceptance rule makes this safe without further locking — ADR-0011 already suspends
+  acceptance while a count is posting, so no scan can land against a multiplier being edited.
+  `BarcodeScannerDialog` learns no domain concepts in the process: it takes an opaque string and
+  an already-translated hint, and all parsing stays in `receivingPanel.ts`.
+- **An armed multiplier names itself:** the value is set while looking at the screen and spent
+  while looking at the pallet, which makes "typed 24 for a carton, got interrupted, scanned the
+  next item" the one silent over-count this screen can produce on its own — a surplus that reads
+  as a genuine over-delivery. So the field states what it will do to the *next* scan continuously
+  rather than waiting to be noticed: blank reads as one unit per scan in muted text, a set value
+  reads as **Następny skan doda 24** against the warning token, and something that is not a
+  quantity is refused there and then, before a carton is presented to find out. `describeScanMultiplier`
+  is the pure function behind all three, both surfaces render the same sentence, and the hint is a
+  live region so the state also reaches a screen reader.
 - **Scan feedback:** the operator is looking at the pallet, not at the screen, so an accepted scan
   flashes a ring over the preview, plays a short blip and vibrates, and appends a line to the **Ostatnie
   skany** list showing the product, what the scan added and the resulting total — the running total,
@@ -612,6 +633,18 @@ schema or command signature changed, so there is no migration and nothing to rol
 side — reverting the Panel change leaves a working text-field count. `BarcodeScannerDialog` is now
 shared by three call sites, which makes its props a contract surface: read
 `.ai/guides/upstream/BACKWARD_COMPATIBILITY.md` before changing them again.
+
+**Backward compatibility of the in-dialog quantity.** Read under that same rule, and additive on
+every axis it touches. `BarcodeScannerDialog` gained six optional props (`quantity`,
+`onQuantityChange`, `quantityLabel`, `quantityPlaceholder`, `quantityHint`, `quantityHintTone`);
+nothing is removed, renamed or narrowed, and the whole group renders only when `onQuantityChange`
+is supplied, so the two call sites that scan a pallet label or a catalog barcode render exactly
+what they rendered before. `describeScanMultiplier` is a new export beside `resolveCountQuantity`,
+which is unchanged and still the single authority on what a scan counts — the new function
+describes that decision and never makes a different one. The server is untouched: no route, payload,
+entity, column or command signature changed, so there is no migration and nothing to roll back
+server-side. Reverting the change leaves camera scans counting one unit each, which is the
+behavior this phase started from.
 
 ## Risks and Tradeoffs
 

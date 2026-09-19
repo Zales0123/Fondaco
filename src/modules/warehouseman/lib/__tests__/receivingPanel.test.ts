@@ -3,6 +3,7 @@ import {
   buildReceivingListQuery,
   describePalletLookupFailure,
   describePalletPrintOutcome,
+  describeScanMultiplier,
   formatCountQuantity,
   normalizeScannedCode,
   parseCountQuantity,
@@ -210,5 +211,48 @@ describe('describePalletLookupFailure', () => {
   it('falls back when the failure says nothing at all', () => {
     expect(describePalletLookupFailure(new Error(''), messages)).toBe('Could not open the pallet.')
     expect(describePalletLookupFailure(undefined, messages)).toBe('Could not open the pallet.')
+  })
+})
+
+describe('describeScanMultiplier', () => {
+  const messages = {
+    each: 'Each scan counts 1',
+    armed: (quantity: string) => `Next scan counts ${quantity}`,
+    invalid: 'Enter a quantity greater than 0',
+  }
+
+  it('says a scan counts one while the field is untouched', () => {
+    // The camera's ordinary case. Anything louder than this would cry wolf on every pallet.
+    expect(describeScanMultiplier('', messages)).toEqual({
+      kind: 'default',
+      message: 'Each scan counts 1',
+    })
+    expect(describeScanMultiplier('   ', messages)).toEqual({
+      kind: 'default',
+      message: 'Each scan counts 1',
+    })
+  })
+
+  it('names an armed multiplier back, because forgetting one over-counts silently', () => {
+    expect(describeScanMultiplier('24', messages)).toEqual({
+      kind: 'armed',
+      message: 'Next scan counts 24',
+    })
+  })
+
+  it('reads the multiplier back the way somebody counting writes it', () => {
+    // `parseCountQuantity` canonicalises to storage precision. "2.5000" is a column, not an
+    // answer to the person holding the carton.
+    expect(describeScanMultiplier('2,5', messages).message).toBe('Next scan counts 2.5')
+  })
+
+  it('refuses a non-quantity before a scan is spent on it', () => {
+    // Without this the operator learns their typo from a failed scan — a carton presented,
+    // a refusal, and a count they have to redo.
+    expect(describeScanMultiplier('abc', messages)).toEqual({
+      kind: 'invalid',
+      message: 'Enter a quantity greater than 0',
+    })
+    expect(describeScanMultiplier('0', messages).kind).toBe('invalid')
   })
 })

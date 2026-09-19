@@ -39,6 +39,7 @@
   "warehouseman.receiving.count.printing": "Drukowanie etykiety…",
   "warehouseman.receiving.count.productSearch.label": "Wyszukaj produkt",
   "warehouseman.receiving.count.productSearch.placeholder": "Nazwa towaru lub SKU",
+  "warehouseman.receiving.count.quantity.armed": "Następny skan doda {quantity}",
   "warehouseman.receiving.count.quantity.hint": "Puste = 1 sztuka na skan",
   "warehouseman.receiving.count.quantity.label": "Ilość",
   "warehouseman.receiving.count.quantity.placeholder": "1",

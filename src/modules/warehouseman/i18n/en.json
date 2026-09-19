@@ -39,6 +39,7 @@
   "warehouseman.receiving.count.printing": "Printing the label…",
   "warehouseman.receiving.count.productSearch.label": "Search for a product",
   "warehouseman.receiving.count.productSearch.placeholder": "Product name or SKU",
+  "warehouseman.receiving.count.quantity.armed": "The next scan counts {quantity}",
   "warehouseman.receiving.count.quantity.hint": "Empty = 1 unit per scan",
   "warehouseman.receiving.count.quantity.label": "Quantity",
   "warehouseman.receiving.count.quantity.placeholder": "1",

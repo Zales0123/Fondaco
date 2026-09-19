@@ -85,6 +85,34 @@ export type BarcodeScannerDialogProps = {
    * five most recent are shown, in that order. Omitted renders nothing.
    */
   log?: ScannerLogEntry[]
+  /**
+   * Current value of the optional field rendered beside the preview, for a
+   * caller that attaches a number to each scan rather than treating a scan as
+   * one of something.
+   *
+   * The dialog never parses or defaults this — it is the caller's string,
+   * echoed back through `onQuantityChange`. What a blank means, what is a
+   * valid amount and what an armed one implies are all domain questions the
+   * scanner has no business answering; it only makes the field reachable
+   * while the camera holds the screen.
+   *
+   * The whole group renders only when `onQuantityChange` is supplied, so
+   * every existing call site is untouched.
+   */
+  quantity?: string
+  /** Receives every keystroke in the quantity field. Its presence renders the field. */
+  onQuantityChange?: (value: string) => void
+  /** Field label. Already-translated, like `manualLabel`. */
+  quantityLabel?: string
+  /** Field placeholder. Already-translated. */
+  quantityPlaceholder?: string
+  /**
+   * Line under the field describing what the current value means for the next
+   * scan. A live region, because it changes without the operator looking.
+   */
+  quantityHint?: string
+  /** How loudly the hint reads. `notice` is for a value that is not the default. */
+  quantityHintTone?: 'neutral' | 'notice' | 'error'
 }
 
 /** Poll cadence for `detect()`. 100ms keeps mobile CPUs (and battery) sane. */
@@ -176,6 +204,12 @@ export function BarcodeScannerDialog({
   manualPlaceholder,
   continuous = false,
   log,
+  quantity = '',
+  onQuantityChange,
+  quantityLabel,
+  quantityPlaceholder,
+  quantityHint,
+  quantityHintTone = 'neutral',
 }: BarcodeScannerDialogProps): React.JSX.Element | null {
   const t = useT()
 
@@ -506,7 +540,13 @@ export function BarcodeScannerDialog({
   if (!open) return null
 
   const manualInputId = 'barcode-scanner-manual-entry'
+  const quantityInputId = 'barcode-scanner-quantity'
   const manualDisabled = busy || manualValue.trim().length === 0
+  const quantityHintClass = quantityHintTone === 'error'
+    ? 'text-status-error-text'
+    : quantityHintTone === 'notice'
+      ? 'text-status-warning-text'
+      : 'text-muted-foreground'
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -583,6 +623,38 @@ export function BarcodeScannerDialog({
               'Keep scanning — the camera stays on. Every item counts, even identical ones.',
             )}
           </p>
+        ) : null}
+
+        {/* Directly under the preview: the value is armed here and fires at the pallet, so
+            it has to be readable in the same glance as the video rather than scrolled to. */}
+        {onQuantityChange ? (
+          <div className="flex flex-col gap-2">
+            <Label htmlFor={quantityInputId}>{quantityLabel}</Label>
+            <Input
+              id={quantityInputId}
+              value={quantity}
+              onChange={(event) => onQuantityChange(event.target.value)}
+              inputMode="decimal"
+              autoComplete="off"
+              disabled={busy}
+              placeholder={quantityPlaceholder}
+              className="h-14"
+              inputClassName="h-full text-base"
+              aria-describedby={quantityHint ? `${quantityInputId}-hint` : undefined}
+            />
+            {quantityHint ? (
+              // Announced, not just shown: the operator's eyes are on the pallet and the
+              // only thing distinguishing "counts 1" from "counts 24" is this line.
+              <span
+                id={`${quantityInputId}-hint`}
+                role="status"
+                aria-live="polite"
+                className={cn('text-sm', quantityHintClass)}
+              >
+                {quantityHint}
+              </span>
+            ) : null}
+          </div>
         ) : null}
 
         {!cameraErrorCopy && (torchSupported || captured) ? (

@@ -43,6 +43,28 @@ behaviour.
 |---|---|---|
 | `continuous` | `false` | Keeps scanning; adds a full-width **Done** button, because the dialog no longer closes itself. |
 | `log` | `undefined` | Running history, **newest entry first** — the natural shape of `[entry, ...previous]`. The first five render under the video in that order, each with a check/cross icon so the outcome never rests on colour alone. |
+| `onQuantityChange` | `undefined` | Renders the quantity field under the preview. Without it nothing is rendered and the dialog is byte-identical to before. |
+| `quantity` | `''` | The field's value. The dialog **never parses or defaults it** — it is the caller's string, echoed straight back. |
+| `quantityLabel` / `quantityPlaceholder` | `undefined` | Already-translated copy, like `manualLabel`. |
+| `quantityHint` / `quantityHintTone` | `undefined` / `'neutral'` | Line under the field, in a live region. `'notice'` and `'error'` raise it to the warning and error tokens. |
+
+### Why the dialog has a quantity field it does not understand
+
+A modal covers the screen that opened it. A caller that attaches a number to
+each scan keeps that number on its own form — and the moment the camera is up,
+the operator cannot reach it. Every scan then means one, whatever the form says.
+
+So the field is reachable from inside the dialog, but its *meaning* stays with
+the caller: what blank means, what counts as valid, and what an armed value
+implies are all domain questions. `src/modules/warehouseman` answers them in
+`lib/receivingPanel.ts` (`resolveCountQuantity`, `describeScanMultiplier`) and
+passes down only a string and a sentence. A scanner that knew what a quantity
+*was* would have to be taught again for the next caller that counts something
+else.
+
+The hint is a live region on purpose. The value is armed while looking at the
+screen and spent while looking at the pallet, and a multiplier somebody set and
+forgot is a silent over-count — the one failure mode this field adds.
 
 ### When does the same barcode count twice?
 

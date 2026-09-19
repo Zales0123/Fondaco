@@ -32,6 +32,7 @@ import {
 } from '../lib/receivingApi'
 import {
   describePalletPrintOutcome,
+  describeScanMultiplier,
   formatCountQuantity,
   normalizeScannedCode,
   parseCountQuantity,
@@ -48,6 +49,23 @@ import { takePalletLabelNotice } from '../lib/palletLabelNotice'
  * pallet counted for an hour would otherwise grow this array for as long as the screen lives.
  */
 const SCAN_LOG_LIMIT = 10
+
+/**
+ * How loudly the quantity field reads back what it will do to the next scan. An armed
+ * multiplier is not an error — nobody typed it by accident — but it is not the resting
+ * state either, and the difference between the two is a silent surplus on the pallet.
+ */
+const MULTIPLIER_TONE_CLASS: Record<ReturnType<typeof describeScanMultiplier>['kind'], string> = {
+  default: 'text-muted-foreground',
+  armed: 'text-status-warning-text',
+  invalid: 'text-status-error-text',
+}
+
+/** The same three states, in the vocabulary the shared scanner dialog speaks. */
+const MULTIPLIER_TONE: Record<
+  ReturnType<typeof describeScanMultiplier>['kind'],
+  'neutral' | 'notice' | 'error'
+> = { default: 'neutral', armed: 'notice', invalid: 'error' }
 
 export type ReceivingCountProps = { receiptId: string; palletId: string }
 
@@ -412,6 +430,15 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
   }
 
   const rows = lines.data ?? []
+  // The same multiplier the form field holds, read back as a sentence about the *next* scan.
+  // The camera is why this exists: the value is armed on one surface and spent on another,
+  // so it has to keep saying what it will do rather than wait to be noticed.
+  const multiplier = describeScanMultiplier(quantity, {
+    each: t('warehouseman.receiving.count.quantity.hint'),
+    armed: (value) =>
+      t('warehouseman.receiving.count.quantity.armed', undefined, { quantity: value }),
+    invalid: t('pz.palletLines.errors.quantityInvalid'),
+  })
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-1">
@@ -508,9 +535,9 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
               disabled={closed || submitting}
               onChange={(event) => setQuantity(event.target.value)}
             />
-            <span className="text-muted-foreground">
-              {t('warehouseman.receiving.count.quantity.hint')}
-            </span>
+            {/* The same sentence the camera dialog shows. One value must not read two ways
+                depending on which surface the operator happens to be looking at. */}
+            <span className={MULTIPLIER_TONE_CLASS[multiplier.kind]}>{multiplier.message}</span>
           </label>
         </div>
         <Button type="submit" size="lg" className="h-16 w-full text-lg" disabled={closed || submitting}>
@@ -643,6 +670,15 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
         errorMessage={formError}
         continuous
         log={scanLog}
+        // The dialog is modal, so the form's own quantity field is unreachable behind it.
+        // This is the same state, not a copy: a multiplier typed here is the one
+        // `recordCount` reads, and it is cleared by the same count that consumes it.
+        quantity={quantity}
+        onQuantityChange={setQuantity}
+        quantityLabel={t('warehouseman.receiving.count.quantity.label')}
+        quantityPlaceholder={t('warehouseman.receiving.count.quantity.placeholder')}
+        quantityHint={multiplier.message}
+        quantityHintTone={MULTIPLIER_TONE[multiplier.kind]}
         title={t('warehouseman.receiving.count.scanner.title')}
         description={t('warehouseman.receiving.count.scanner.description')}
         manualLabel={t('warehouseman.receiving.count.scanner.manualLabel')}
