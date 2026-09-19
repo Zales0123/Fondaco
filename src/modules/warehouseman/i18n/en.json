@@ -148,6 +148,9 @@
   "warehouseman.scan.stock.availableLabel": "Available",
   "warehouseman.scan.stock.inWarehouse": "In {warehouse}",
   "warehouseman.scan.stock.noWarehouse": "Stock needs an assigned warehouse. Ask the office to assign you one.",
+  "warehouseman.scan.stock.locationLabel": "Where it is",
+  "warehouseman.scan.stock.locationUnnamed": "Not named",
+  "warehouseman.scan.stock.otherLocations": "More locations: {count}",
   "warehouseman.stub.back": "Back",
   "warehouseman.stub.notImplemented": "This operation is not available yet."
 }

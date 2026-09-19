@@ -31,8 +31,13 @@ The stock read is filtered to the warehouseman's **assigned warehouse**, which c
 the trusted session context and never from the client — the panel works one warehouse at
 a time, and an unfiltered read would put every warehouse's total under a header that names
 one. Somebody with no assignment is told the figure needs one rather than being shown a
-number that answers a different question. Within that warehouse the buckets are summed: a
-bin-level breakdown is not a question anyone holding a scanner is asking.
+number that answers a different question. Within that warehouse the buckets are summed
+into the two figures, and the fullest location is named beside them: a quantity alone
+answers "is it here" and leaves the warehouseman to find out where on their own, which is
+the walk they scanned to avoid. Only one location is named — the one that can fill the
+most of what they came for — with a count of the others beneath it so the figure is not
+read as one shelf's worth. The full bin-by-bin listing stays off the screen; somebody
+holding a scanner reads a line, not a table.
 
 Typing the code stays the path that always works: over plain http a phone has no secure
 context and therefore no camera at all.
