@@ -35,6 +35,13 @@ export type ScanQuantityStepProps = {
  * because they are the ones that work without fine motor control or a keyboard, and the
  * field is there for the odd exact number that would otherwise be a lot of tapping. There
  * is no way to scan past this: `BarcodeScannerDialog` accepts nothing while it is up.
+ *
+ * The step is rendered *into* the scanner dialog, not onto the panel, so it inherits the
+ * dialog's surface rather than re-pointing the tokens to the panel's paper palette. A
+ * `data-om-panel` scope here would paint the panel's near-black ink onto the dialog's own
+ * ground — invisible text and invisible outlines whenever the two disagree, which is every
+ * time the backend is in dark mode. Glove-sized controls are what this step owes the
+ * operator; the colours belong to whoever is hosting it.
  */
 export function ScanQuantityStep({
   productName,
@@ -78,12 +85,15 @@ export function ScanQuantityStep({
   // What the confirm button both promises and sends. Reading it once keeps the label and
   // the count from ever disagreeing about what is being added.
   const effective = typing !== null ? resolveTyped(typing, quantity) : quantity
+  const atFloor = quantity <= MIN_SCAN_QUANTITY
 
   return (
-    <div data-om-panel="warehouseman" className="flex flex-col gap-4 text-foreground">
+    <div className="flex flex-col gap-4 text-foreground">
       <div className="flex flex-col gap-1">
-        <span className="text-2xl font-bold">{productName}</span>
-        <span className="font-mono text-base text-muted-foreground">{code}</span>
+        {/* A product name is whatever the catalog says it is, so it wraps rather than
+            running off the side of a phone. */}
+        <span className="break-words text-2xl font-bold leading-tight">{productName}</span>
+        <span className="break-all font-mono text-base text-muted-foreground">{code}</span>
       </div>
 
       {/* A refused count leaves the step up rather than throwing the operator back to the
@@ -94,60 +104,69 @@ export function ScanQuantityStep({
         </p>
       ) : null}
 
-      <div className="flex items-center justify-center gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          className="h-20 w-20 shrink-0 border-2 text-lg font-bold"
-          disabled={busy || quantity <= MIN_SCAN_QUANTITY}
-          aria-label={t('warehouseman.receiving.count.step.decreaseBy', undefined, { step: COARSE_STEP })}
-          onClick={() => step(-COARSE_STEP)}
-        >
-          −{COARSE_STEP}
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          className="h-20 w-20 shrink-0 border-2"
-          disabled={busy || quantity <= MIN_SCAN_QUANTITY}
-          aria-label={t('warehouseman.receiving.count.step.decrease')}
-          onClick={() => step(-1)}
-        >
-          <Minus className="size-8" aria-hidden="true" />
-        </Button>
-        {/* Announced as it changes: the number is the only thing that distinguishes this
-            confirmation from the last one, and it is read by someone not looking at it. */}
-        <Input
-          value={shown}
-          inputMode="numeric"
-          disabled={busy}
-          className="h-20 min-w-0 flex-1 border-2"
-          inputClassName="h-full text-center text-3xl font-bold"
-          aria-label={t('warehouseman.receiving.count.step.quantityLabel')}
-          aria-live="polite"
-          onChange={(event) => setTyping(event.target.value)}
-          onBlur={(event) => commitTyped(event.target.value)}
-        />
-        <Button
-          type="button"
-          variant="outline"
-          className="h-20 w-20 shrink-0 border-2"
-          disabled={busy}
-          aria-label={t('warehouseman.receiving.count.step.increase')}
-          onClick={() => step(1)}
-        >
-          <Plus className="size-8" aria-hidden="true" />
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          className="h-20 w-20 shrink-0 border-2 text-lg font-bold"
-          disabled={busy}
-          aria-label={t('warehouseman.receiving.count.step.increaseBy', undefined, { step: COARSE_STEP })}
-          onClick={() => step(COARSE_STEP)}
-        >
-          +{COARSE_STEP}
-        </Button>
+      {/* Two rows, not one. Five thumb-sized controls side by side need ~430px and a phone
+          held in a warehouse aisle has ~280px inside the dialog's padding, which squeezed
+          the number itself down to a sliver and pushed `+10` off the screen. The ±1 pair
+          keeps the number between them where a stepper is read; the coarse pair, used far
+          less often, takes the row below. */}
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            className="h-20 w-20 shrink-0 border-2"
+            disabled={busy || atFloor}
+            aria-label={t('warehouseman.receiving.count.step.decrease')}
+            onClick={() => step(-1)}
+          >
+            <Minus className="size-8" aria-hidden="true" />
+          </Button>
+          {/* Announced as it changes: the number is the only thing that distinguishes this
+              confirmation from the last one, and it is read by someone not looking at it. */}
+          <Input
+            value={shown}
+            inputMode="numeric"
+            disabled={busy}
+            className="h-20 min-w-0 flex-1 border-2"
+            inputClassName="h-full text-center text-3xl font-bold"
+            aria-label={t('warehouseman.receiving.count.step.quantityLabel')}
+            aria-live="polite"
+            onChange={(event) => setTyping(event.target.value)}
+            onBlur={(event) => commitTyped(event.target.value)}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            className="h-20 w-20 shrink-0 border-2"
+            disabled={busy}
+            aria-label={t('warehouseman.receiving.count.step.increase')}
+            onClick={() => step(1)}
+          >
+            <Plus className="size-8" aria-hidden="true" />
+          </Button>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            className="h-16 w-full border-2 text-lg font-bold"
+            disabled={busy || atFloor}
+            aria-label={t('warehouseman.receiving.count.step.decreaseBy', undefined, { step: COARSE_STEP })}
+            onClick={() => step(-COARSE_STEP)}
+          >
+            −{COARSE_STEP}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            className="h-16 w-full border-2 text-lg font-bold"
+            disabled={busy}
+            aria-label={t('warehouseman.receiving.count.step.increaseBy', undefined, { step: COARSE_STEP })}
+            onClick={() => step(COARSE_STEP)}
+          >
+            +{COARSE_STEP}
+          </Button>
+        </div>
       </div>
 
       <Button
