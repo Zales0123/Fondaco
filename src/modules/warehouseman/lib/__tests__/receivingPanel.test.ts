@@ -14,6 +14,7 @@ import {
   receivingSummaryHref,
   resolveApiMessage,
   resolveCountQuantity,
+  suggestScanQuantity,
 } from '../receivingPanel'
 
 describe('receiving hrefs', () => {
@@ -265,5 +266,104 @@ describe('adjustScanQuantity', () => {
     expect(adjustScanQuantity(3, -10)).toBe(1)
     expect(adjustScanQuantity(1, -1)).toBe(1)
     expect(adjustScanQuantity(1, -10)).toBe(1)
+  })
+})
+
+describe('suggestScanQuantity', () => {
+  const line = {
+    expected: '48.0000',
+    countedAcrossDelivery: '0.0000',
+    countedOnThisPalletThen: '0.0000',
+    countedOnThisPalletNow: '0.0000',
+  }
+
+  it('opens on what the delivery ordered, so the ordinary pallet is scan then confirm', () => {
+    expect(suggestScanQuantity(line)).toEqual({
+      quantity: 48,
+      expected: '48.0000',
+      counted: '0.0000',
+      outstanding: '48.0000',
+    })
+  })
+
+  it('proposes only what is still missing once another pallet holds part of the line', () => {
+    // 30 counted onto a pallet that is not this one. Re-proposing 48 here is how a delivery
+    // gets confirmed at 78.
+    const suggestion = suggestScanQuantity({ ...line, countedAcrossDelivery: '30.0000' })
+    expect(suggestion.quantity).toBe(18)
+    expect(suggestion.counted).toBe('30.0000')
+    expect(suggestion.outstanding).toBe('18.0000')
+  })
+
+  it('reads this pallet live rather than from the snapshot it is already in', () => {
+    // The comparison was read when 10 were on this pallet; 25 are on it now. Counting both
+    // would propose 13 instead of 23 and quietly lose ten items.
+    const suggestion = suggestScanQuantity({
+      expected: '48.0000',
+      countedAcrossDelivery: '10.0000',
+      countedOnThisPalletThen: '10.0000',
+      countedOnThisPalletNow: '25.0000',
+    })
+    expect(suggestion.quantity).toBe(23)
+    expect(suggestion.counted).toBe('25.0000')
+  })
+
+  it('keeps the other pallets when this one has been emptied since the snapshot', () => {
+    const suggestion = suggestScanQuantity({
+      expected: '48.0000',
+      countedAcrossDelivery: '30.0000',
+      countedOnThisPalletThen: '12.0000',
+      countedOnThisPalletNow: '0.0000',
+    })
+    expect(suggestion.quantity).toBe(30)
+    expect(suggestion.counted).toBe('18.0000')
+  })
+
+  it('falls back to one once the line is counted in full, and says it is', () => {
+    const suggestion = suggestScanQuantity({ ...line, countedOnThisPalletNow: '48.0000' })
+    expect(suggestion.quantity).toBe(1)
+    expect(suggestion.outstanding).toBe('0.0000')
+    expect(suggestion.counted).toBe('48.0000')
+  })
+
+  it('never proposes a negative or zero count when the delivery is already over-counted', () => {
+    const suggestion = suggestScanQuantity({ ...line, countedOnThisPalletNow: '60.0000' })
+    expect(suggestion.quantity).toBe(1)
+    expect(suggestion.outstanding).toBe('0.0000')
+  })
+
+  it('proposes one for a product no line of the delivery expected', () => {
+    expect(suggestScanQuantity(null)).toEqual({
+      quantity: 1,
+      expected: null,
+      counted: '0.0000',
+      outstanding: null,
+    })
+    const surplus = suggestScanQuantity({ ...line, expected: null, countedOnThisPalletNow: '4.0000' })
+    expect(surplus.quantity).toBe(1)
+    expect(surplus.expected).toBeNull()
+    expect(surplus.outstanding).toBeNull()
+  })
+
+  it('floors a fractional shortfall rather than proposing a count the stepper cannot show', () => {
+    // The dial is whole items. 2.5 outstanding proposes 2 and reports the real figure beside
+    // it, so a delivery written in a unit this screen cannot count stays visible.
+    const fractional = suggestScanQuantity({ ...line, expected: '2.5000' })
+    expect(fractional.quantity).toBe(2)
+    expect(fractional.outstanding).toBe('2.5000')
+    expect(suggestScanQuantity({ ...line, expected: '0.5000' }).quantity).toBe(1)
+  })
+
+  it('adds decimals without going through floats', () => {
+    // 0.1 + 0.2 as JS numbers is 0.30000000000000004, which would make a matching delivery
+    // short by a rounding error.
+    const suggestion = suggestScanQuantity({
+      expected: '0.3000',
+      countedAcrossDelivery: '0.1000',
+      countedOnThisPalletThen: '0.0000',
+      countedOnThisPalletNow: '0.2000',
+    })
+    expect(suggestion.counted).toBe('0.3000')
+    expect(suggestion.outstanding).toBe('0.0000')
   })
 })

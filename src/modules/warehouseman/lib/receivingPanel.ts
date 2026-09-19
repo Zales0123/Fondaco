@@ -1,6 +1,8 @@
 /** Pure agreements shared by the panel's receiving screens: where they link, what they ask
  *  the `pz` API for, and what a gloved hand is allowed to type into them. */
 
+import { fromScaledQuantity, toScaledQuantity } from '@/modules/pz/lib/quantity'
+
 export const RECEIVING_LIST_HREF = '/warehouseman/receiving'
 
 export function receivingReceiptHref(receiptId: string): string {
@@ -105,6 +107,90 @@ export const MIN_SCAN_QUANTITY = 1
  */
 export function adjustScanQuantity(current: number, delta: number): number {
   return Math.max(MIN_SCAN_QUANTITY, current + delta)
+}
+
+/**
+ * What the delivery says about one product, as the counting screen knows it at the moment of
+ * a scan. The three quantities are decimal strings because that is what `pz` stores and
+ * answers with; turning them into JS numbers to subtract is how a matching delivery becomes
+ * short by 0.0000000000000004.
+ *
+ * The two figures for this pallet are what make it add up. The document-wide comparison is a
+ * snapshot read when the screen loaded, while the open pallet's own lines are refetched after
+ * every count: taking this pallet's share back out of the snapshot and adding the live figure
+ * keeps the suggestion right as the operator counts, without re-asking the server for the
+ * whole delivery between scans.
+ */
+export type DeliveryLineProgress = {
+  /** What the document expects of this product; `null` when no line of it names the product. */
+  expected: string | null
+  /** Everything counted for it across every pallet, as the comparison last answered. */
+  countedAcrossDelivery: string
+  /** This pallet's share of that answer — superseded by, not added to, the figure below. */
+  countedOnThisPalletThen: string
+  /** What this pallet holds now. */
+  countedOnThisPalletNow: string
+}
+
+export type ScanQuantitySuggestion = {
+  /** The number the quantity step opens on. Never below `MIN_SCAN_QUANTITY`. */
+  quantity: number
+  /** The document's own figure, for the line that explains where `quantity` came from. */
+  expected: string | null
+  /** Everything already counted for this product across the delivery, this pallet included. */
+  counted: string
+  /**
+   * How much of the line is still missing, never negative and `null` when the document did
+   * not expect the product. It is not `quantity`: a shortfall of 0.5 or of none at all still
+   * opens the dial on one, and only this says which of those happened.
+   */
+  outstanding: string | null
+}
+
+/**
+ * What to put on the dial when a scan resolves to a product.
+ *
+ * A scan on its own asserts one of something is there, but a delivery has already said how
+ * many are coming, and on the floor those are usually the same number: one pallet, one
+ * product, the whole line. Opening on the delivery's figure makes the ordinary case scan then
+ * confirm, where opening on 1 made it forty-seven taps of `+1`.
+ *
+ * What is left to count, not what the document expects, is the proposal. A delivery split
+ * across pallets is the ordinary case here — that is what pallets are — and re-proposing the
+ * full line on the second pallet would invite a confirmed double count. Nothing above the
+ * shortfall is ever suggested; counting more than was expected stays a deliberate act.
+ *
+ * Fractional remainders floor, because the step is a stepper over whole items and cannot
+ * express 2.5 anyway. The hint beside it still reports the document's real figure, so a
+ * delivery written in a unit this screen cannot count is visible rather than silently rounded.
+ */
+export function suggestScanQuantity(progress: DeliveryLineProgress | null): ScanQuantitySuggestion {
+  const countedOnOtherPallets = max(
+    toScaledQuantity(progress?.countedAcrossDelivery ?? '0') - toScaledQuantity(progress?.countedOnThisPalletThen ?? '0'),
+    0n,
+  )
+  const counted = countedOnOtherPallets + toScaledQuantity(progress?.countedOnThisPalletNow ?? '0')
+  const expected = progress?.expected != null ? toScaledQuantity(progress.expected) : null
+  const outstanding = expected === null ? null : max(expected - counted, 0n)
+
+  return {
+    // A product the document never mentioned has no figure to propose, so the scan means what
+    // it always meant: one of this is here, and the operator says if it is more.
+    quantity: outstanding === null ? MIN_SCAN_QUANTITY : wholeItems(outstanding),
+    expected: expected === null ? null : fromScaledQuantity(expected),
+    counted: fromScaledQuantity(counted),
+    outstanding: outstanding === null ? null : fromScaledQuantity(outstanding),
+  }
+}
+
+function max(left: bigint, right: bigint): bigint {
+  return left > right ? left : right
+}
+
+/** The shortfall as whole items, falling back to the bare scan once there is none left. */
+function wholeItems(outstanding: bigint): number {
+  if (outstanding <= 0n) return MIN_SCAN_QUANTITY
+  return Math.max(MIN_SCAN_QUANTITY, Math.floor(Number(fromScaledQuantity(outstanding))))
 }
 
 
