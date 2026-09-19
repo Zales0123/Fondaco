@@ -66,16 +66,26 @@ describe('createLabelPrinterService', () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve
     })
+    let announceLocked: (() => void) | null = null
+    const locked = new Promise<void>((resolve) => {
+      announceLocked = resolve
+    })
     const printer = createFakePrinter()
     const service = serviceWith(async () => {
+      // Opening the port happens inside the lock, so this is the moment the
+      // first job holds it.
+      announceLocked!()
       await gate
       return printer.transport
     })
 
     const image = await readFile(assetPath)
     const first = service.printImage(image)
-    // Let the first job reach the lock before the second one arrives.
-    await Promise.resolve()
+    // The lock is claimed only after rasterizing, which decodes the image on a
+    // native thread. Yielding a fixed number of ticks would not get the first
+    // job there; wait for it to actually hold the lock, or the two jobs race
+    // and the second one can win.
+    await locked
     const second = service.printImage(image)
 
     await expect(second).rejects.toBeInstanceOf(PrinterBusyError)
