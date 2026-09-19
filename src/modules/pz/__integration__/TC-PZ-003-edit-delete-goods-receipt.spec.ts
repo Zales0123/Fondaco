@@ -91,6 +91,16 @@ async function listById(request: APIRequestContext, id: string): Promise<GoodsRe
   return ((await response.json()) as { items: GoodsReceiptRow[] }).items
 }
 
+/** Reads the undo handle the CRUD factory attaches to every command-backed write. */
+function readOperation(response: { headers: () => Record<string, string> }): { id: string; undoToken: string } {
+  const raw = response.headers()['x-om-operation']
+  expect(raw, 'the write did not report an operation to undo').toBeTruthy()
+  const parsed = JSON.parse(decodeURIComponent(raw.replace(/^omop:/, ''))) as { id: string; undoToken: string }
+  expect(parsed.undoToken).toBeTruthy()
+  return parsed
+}
+
+
 test.describe('TC-PZ-003 edit and delete draft goods receipts', () => {
   let admin: APIRequestContext
   let adminCookies: Awaited<ReturnType<APIRequestContext['storageState']>>['cookies']
@@ -289,6 +299,143 @@ test.describe('TC-PZ-003 edit and delete draft goods receipts', () => {
       failOnStatusCode: false,
     })
     expect(reused.status(), await reused.text()).toBe(201)
+  })
+
+  test('refuses a write that carries no record version', async () => {
+    const draft = await createDraft(admin)
+    const body = {
+      id: draft.id,
+      documentNumber: draft.documentNumber,
+      documentDate: yesterday(),
+      supplierName: 'Hurtownia Bez Wersji',
+      warehouseId,
+      lines: [{ catalogProductId: productAId, quantity: '2' }],
+    }
+
+    // The installed lock helper is additive and ignores a missing version, so this is the
+    // module's own requirement; without it a blind write would silently win.
+    const update = await admin.put(API, { data: body, failOnStatusCode: false })
+    expect(update.status(), await update.text()).toBe(400)
+
+    const remove = await admin.delete(`${API}?id=${encodeURIComponent(draft.id)}`, { failOnStatusCode: false })
+    expect(remove.status(), await remove.text()).toBe(400)
+
+    expect((await readGoodsReceipt(admin, draft.id)).supplierName).toBe('Hurtownia Kowalski')
+  })
+
+  test('undoes an edit, is idempotent on retry, and refuses once the document moved on', async () => {
+    const draft = await createDraft(admin)
+    const opened = await readGoodsReceipt(admin, draft.id)
+    const body = {
+      id: draft.id,
+      documentNumber: draft.documentNumber,
+      documentDate: yesterday(),
+      warehouseId,
+    }
+
+    const edited = await admin.put(API, {
+      headers: { [LOCK_HEADER]: opened.updatedAt ?? '' },
+      data: {
+        ...body,
+        supplierName: 'Hurtownia Po Edycji',
+        lines: [
+          { catalogProductId: productBId, quantity: '7', unit: 'kg' },
+          { catalogProductId: productAId, quantity: '2' },
+        ],
+      },
+      failOnStatusCode: false,
+    })
+    expect(edited.status(), await edited.text()).toBe(200)
+    const operation = readOperation(edited)
+    expect((await readGoodsReceipt(admin, draft.id)).lineCount).toBe(2)
+
+    const undone = await admin.post('/api/audit_logs/audit-logs/actions/undo', {
+      data: { undoToken: operation.undoToken },
+      failOnStatusCode: false,
+    })
+    expect(undone.status(), await undone.text()).toBe(200)
+
+    const restored = await readGoodsReceipt(admin, draft.id)
+    expect(restored.supplierName).toBe('Hurtownia Kowalski')
+    expect(restored.lineCount).toBe(1)
+    expect(restored.lines?.map((line) => line.catalogProductId)).toEqual([productAId])
+
+    // A retry finds the snapshot already back in place and changes nothing further.
+    const retried = await admin.post('/api/audit_logs/audit-logs/actions/undo', {
+      data: { undoToken: operation.undoToken },
+      failOnStatusCode: false,
+    })
+    expect([200, 400, 404, 409]).toContain(retried.status())
+    const afterRetry = await readGoodsReceipt(admin, draft.id)
+    expect(afterRetry.supplierName).toBe('Hurtownia Kowalski')
+    expect(afterRetry.lineCount).toBe(1)
+  })
+
+  test('refuses to undo an edit the document has already moved past', async () => {
+    const draft = await createDraft(admin)
+    const opened = await readGoodsReceipt(admin, draft.id)
+    const body = {
+      id: draft.id,
+      documentNumber: draft.documentNumber,
+      documentDate: yesterday(),
+      warehouseId,
+      lines: [{ catalogProductId: productAId, quantity: '2' }],
+    }
+
+    const first = await admin.put(API, {
+      headers: { [LOCK_HEADER]: opened.updatedAt ?? '' },
+      data: { ...body, supplierName: 'Hurtownia Pierwsza Edycja' },
+      failOnStatusCode: false,
+    })
+    expect(first.status(), await first.text()).toBe(200)
+    const operation = readOperation(first)
+
+    // Someone edits again, so the first edit is no longer the document's current shape.
+    const current = await readGoodsReceipt(admin, draft.id)
+    const second = await admin.put(API, {
+      headers: { [LOCK_HEADER]: current.updatedAt ?? '' },
+      data: { ...body, supplierName: 'Hurtownia Druga Edycja' },
+      failOnStatusCode: false,
+    })
+    expect(second.status(), await second.text()).toBe(200)
+
+    const undone = await admin.post('/api/audit_logs/audit-logs/actions/undo', {
+      data: { undoToken: operation.undoToken },
+      failOnStatusCode: false,
+    })
+    expect(undone.status(), await undone.text()).toBeGreaterThanOrEqual(400)
+    // Undoing would have thrown away the second edit; it stands instead.
+    expect((await readGoodsReceipt(admin, draft.id)).supplierName).toBe('Hurtownia Druga Edycja')
+  })
+
+  test('loads a draft with its lines and saves added and removed lines from the screen', async ({ context, page }) => {
+    test.setTimeout(120_000)
+    await context.addCookies(adminCookies)
+    const draft = await createDraft(admin, {
+      lines: [
+        { catalogProductId: productAId, quantity: '2' },
+        { catalogProductId: productBId, quantity: '5', unit: 'kg' },
+      ],
+    })
+
+    await page.goto(`${INDEX_PATH}/${draft.id}/edit`)
+
+    // The screen opens with the stored lines, not an empty editor.
+    await expect(page.getByRole('textbox', { name: /Quantity, position 1|Ilość, pozycja 1/i })).toHaveValue('2.0000')
+    await expect(page.getByRole('textbox', { name: /Quantity, position 2|Ilość, pozycja 2/i })).toHaveValue('5.0000')
+    await expect(page.getByRole('textbox', { name: /Unit, position 2|Jednostka, pozycja 2/i })).toHaveValue('kg')
+
+    await page.getByRole('textbox', { name: /Quantity, position 1|Ilość, pozycja 1/i }).fill('8')
+    await page.getByRole('button', { name: /Remove position 2|Usuń pozycję 2/i }).click()
+    await expect(page.getByRole('textbox', { name: /Quantity, position 2|Ilość, pozycja 2/i })).toHaveCount(0)
+
+    await page.getByRole('button', { name: /Save changes|Zapisz zmiany/i }).first().click()
+    await page.waitForURL(new RegExp(`${INDEX_PATH}(\\?|$)`))
+
+    const saved = await readGoodsReceipt(admin, draft.id)
+    expect(saved.lineCount).toBe(1)
+    expect(saved.lines?.map((line) => line.quantity)).toEqual(['8.0000'])
+    expect(saved.lines?.map((line) => line.catalogProductId)).toEqual([productAId])
   })
 
   test('tells the second editor their copy is stale instead of losing their colleague work', async ({ context, page }) => {

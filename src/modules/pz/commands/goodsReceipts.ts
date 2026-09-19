@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { LockMode } from '@mikro-orm/core'
 import type { EntityManager, FilterQuery } from '@mikro-orm/postgresql'
 import {
   registerCommand,
@@ -19,7 +20,10 @@ import {
   isCrudHttpError,
   isUniqueViolation,
 } from '@open-mercato/shared/lib/crud/errors'
-import { enforceCommandOptimisticLock } from '@open-mercato/shared/lib/crud/optimistic-lock-command'
+import {
+  assertOptimisticLock,
+  readOptimisticLockExpected,
+} from '@open-mercato/shared/lib/crud/optimistic-lock-command'
 import type { CrudEmitContext, CrudEventsConfig, CrudIndexerConfig } from '@open-mercato/shared/lib/crud/types'
 import type { DataEngine } from '@open-mercato/shared/lib/data/engine'
 import type { QueryEngine } from '@open-mercato/shared/lib/query/types'
@@ -693,25 +697,32 @@ const createGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
 registerCommand(createGoodsReceiptCommand)
 
 /**
- * Loads a goods receipt for a write, with everything a write has to agree on: the record
- * exists in the caller's scope, it is still a draft, and the caller is holding the version
- * they were shown. A confirmed document is refused here rather than in the UI, so calling
- * the endpoint directly gets the same answer as clicking the button (ADR-0006).
+ * Reads a goods receipt for a write and holds it until the transaction commits.
+ *
+ * The row is locked, so the three things a write has to agree on — it exists in the
+ * caller's scope, it is still a draft, and the caller holds the version they were shown —
+ * cannot stop being true between the check and the write. Checking outside the transaction
+ * would leave a window in which a concurrent confirmation commits and this write then
+ * overwrites or deletes a confirmed document (ADR-0006).
  */
-async function loadDraftForWrite(
+async function lockDraftForWrite(
   em: EntityManager,
-  ctx: CommandRuntimeContext,
   scope: GoodsReceiptScope,
   id: string,
+  expectedVersion: string,
   translate: TranslateFn,
-): Promise<{ receipt: GoodsReceipt; lines: GoodsReceiptLine[] }> {
+): Promise<GoodsReceipt> {
   const receipt = assertFound(
-    await em.findOne(GoodsReceipt, {
-      id,
-      tenantId: scope.tenantId,
-      organizationId: scope.organizationId,
-      deletedAt: null,
-    } as FilterQuery<GoodsReceipt>),
+    await em.findOne(
+      GoodsReceipt,
+      {
+        id,
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        deletedAt: null,
+      } as FilterQuery<GoodsReceipt>,
+      { lockMode: LockMode.PESSIMISTIC_WRITE },
+    ),
     translate('pz.goodsReceipts.errors.notFound', 'That goods receipt no longer exists.'),
   )
   if (receipt.status !== 'draft') {
@@ -722,14 +733,51 @@ async function loadDraftForWrite(
       ),
     )
   }
-  enforceCommandOptimisticLock({
+  assertOptimisticLock({
     resourceKind: GOODS_RECEIPT_ENTITY_ID,
     resourceId: id,
+    expected: expectedVersion,
     current: receipt.updatedAt,
-    request: ctx.request,
   })
-  const lines = await em.find(GoodsReceiptLine, { goodsReceipt: receipt.id } as FilterQuery<GoodsReceiptLine>)
-  return { receipt, lines }
+  return receipt
+}
+
+/** Loads the aggregate for a before-snapshot, without taking a lock. */
+async function readAggregateForSnapshot(
+  em: EntityManager,
+  scope: GoodsReceiptScope,
+  id: string,
+  translate: TranslateFn,
+): Promise<SerializedGoodsReceipt> {
+  const receipt = assertFound(
+    await em.findOne(GoodsReceipt, {
+      id,
+      tenantId: scope.tenantId,
+      organizationId: scope.organizationId,
+      deletedAt: null,
+    } as FilterQuery<GoodsReceipt>),
+    translate('pz.goodsReceipts.errors.notFound', 'That goods receipt no longer exists.'),
+  )
+  return serializeGoodsReceipt(receipt, await findScopedLines(em, String(receipt.id), scope))
+}
+
+/**
+ * The installed lock helper is deliberately additive: it does nothing when the caller sends
+ * no version, so every existing consumer keeps working. A goods receipt cannot afford that
+ * — an edit or a delete issued without a version would silently win over whatever anyone
+ * else had saved — so this module requires one.
+ */
+function requireExpectedVersion(ctx: CommandRuntimeContext, translate: TranslateFn): string {
+  const expected = readOptimisticLockExpected(ctx.request ?? null)
+  if (!expected) {
+    throw badRequest(
+      translate(
+        'pz.goodsReceipts.errors.versionRequired',
+        'Send the record version you are working from in the optimistic-lock header.',
+      ),
+    )
+  }
+  return expected
 }
 
 function requireRecordId(raw: unknown, translate: TranslateFn): string {
@@ -743,6 +791,39 @@ function requireRecordId(raw: unknown, translate: TranslateFn): string {
   return id
 }
 
+/** Compares an aggregate against a snapshot, ignoring the version stamp that always moves. */
+function aggregateMatchesSnapshot(
+  receipt: GoodsReceipt,
+  lines: readonly GoodsReceiptLine[],
+  snapshot: SerializedGoodsReceipt,
+): boolean {
+  const current = serializeGoodsReceipt(receipt, lines)
+  const strip = ({ updatedAt: _updatedAt, ...rest }: SerializedGoodsReceipt) => rest
+  return JSON.stringify(strip(current)) === JSON.stringify(strip(snapshot))
+}
+
+/**
+ * Undo is only safe while the record still looks exactly as the action left it. Anything
+ * else — a later edit, a confirmation, a second undo — means restoring the snapshot would
+ * throw away work nobody asked to lose, so it is refused instead. Restoring onto a
+ * confirmed document would also reopen a one-way transition through the back door.
+ */
+function assertUndoableState(
+  receipt: GoodsReceipt,
+  lines: readonly GoodsReceiptLine[],
+  after: SerializedGoodsReceipt | null,
+  translate: TranslateFn,
+): void {
+  if (!after || !aggregateMatchesSnapshot(receipt, lines, after)) {
+    throw conflict(
+      translate(
+        'pz.goodsReceipts.errors.undoStale',
+        'This goods receipt has changed since that action, so it can no longer be undone.',
+      ),
+    )
+  }
+}
+
 const updateGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsReceipt> = {
   id: 'pz.goodsReceipts.update',
   isUndoable: true,
@@ -750,20 +831,16 @@ const updateGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
     const { translate } = await resolveTranslations()
     const scope = ensureGoodsReceiptScope(ctx, translate)
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const { receipt, lines } = await loadDraftForWrite(em, ctx, scope, requireRecordId(rawInput, translate), translate)
-    return { before: serializeGoodsReceipt(receipt, lines) }
+    return { before: await readAggregateForSnapshot(em, scope, requireRecordId(rawInput, translate), translate) }
   },
   async execute(rawInput, ctx) {
     const { translate } = await resolveTranslations()
     const scope = ensureGoodsReceiptScope(ctx, translate)
     const id = requireRecordId(rawInput, translate)
+    const expectedVersion = requireExpectedVersion(ctx, translate)
     const input = await parseInput(rawInput, translate)
 
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const { receipt, lines: existingLines } = await loadDraftForWrite(em, ctx, scope, id, translate)
-    if (await findByDocumentNumber(em, scope, input.documentNumber, id)) {
-      throw duplicateDocumentNumberError(translate)
-    }
     await requireWarehouse(ctx, scope, input.warehouseId, translate)
     const catalog = await resolveCatalogLines(
       ctx,
@@ -772,28 +849,8 @@ const updateGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
       translate,
     )
 
-    const now = new Date()
-    receipt.documentNumber = input.documentNumber
-    receipt.documentDate = toDocumentDate(input.documentDate)
-    receipt.supplierName = input.supplierName
-    receipt.warehouseId = input.warehouseId
-    receipt.updatedAt = now
-
-    // Lines are replaced wholesale: they carry no identity a user recognises, and
-    // reconciling them row by row would only invent one.
-    const replacements = input.lines.map((line, index) =>
-      buildGoodsReceiptLine(em, {
-        receipt,
-        scope,
-        lineNumber: index + 1,
-        catalogProductId: line.catalogProductId,
-        quantity: line.quantity,
-        unit: line.unit,
-        resolved: catalog.get(line.catalogProductId) as ResolvedCatalogLine,
-        now,
-      }),
-    )
-
+    let receipt!: GoodsReceipt
+    let replacements: GoodsReceiptLine[] = []
     try {
       await runCrudCommandWrite<GoodsReceipt>({
         ctx,
@@ -805,10 +862,36 @@ const updateGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
         indexer: goodsReceiptCrudIndexer,
         syncOrigin: ctx.syncOrigin,
         phases: [
-          ({ em: tx }) => {
-            for (const line of existingLines) tx.remove(line)
+          async ({ em: tx }) => {
+            receipt = await lockDraftForWrite(tx, scope, id, expectedVersion, translate)
+          },
+          async ({ em: tx }) => {
+            if (await findByDocumentNumber(tx, scope, input.documentNumber, id)) {
+              throw duplicateDocumentNumberError(translate)
+            }
+            // Lines are replaced wholesale: they carry no identity a user recognises, and
+            // reconciling them row by row would only invent one.
+            for (const line of await findScopedLines(tx, id, scope)) tx.remove(line)
           },
           ({ em: tx }) => {
+            const now = new Date()
+            receipt.documentNumber = input.documentNumber
+            receipt.documentDate = toDocumentDate(input.documentDate)
+            receipt.supplierName = input.supplierName
+            receipt.warehouseId = input.warehouseId
+            receipt.updatedAt = now
+            replacements = input.lines.map((line, index) =>
+              buildGoodsReceiptLine(tx, {
+                receipt,
+                scope,
+                lineNumber: index + 1,
+                catalogProductId: line.catalogProductId,
+                quantity: line.quantity,
+                unit: line.unit,
+                resolved: catalog.get(line.catalogProductId) as ResolvedCatalogLine,
+                now,
+              }),
+            )
             tx.persist(receipt)
             for (const line of replacements) tx.persist(line)
           },
@@ -823,14 +906,13 @@ const updateGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
       throw error
     }
 
-    receipt.lines.set(replacements)
     return receipt
   },
-  captureAfter: (_input, result) => serializeGoodsReceipt(result, result.lines.getItems()),
+  captureAfter: (_input, result, ctx) => snapshotAggregate(ctx, result),
   buildLog: async ({ result, snapshots }) => {
     const { translate } = await resolveTranslations()
     const before = (snapshots.before as SerializedGoodsReceipt | undefined) ?? null
-    const after = serializeGoodsReceipt(result, result.lines.getItems())
+    const after = snapshots.after as SerializedGoodsReceipt
     return {
       actionLabel: translate('pz.audit.goodsReceipts.update', 'Update goods receipt'),
       resourceKind: 'pz.goods_receipt',
@@ -850,37 +932,51 @@ const updateGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
   async undo({ logEntry, ctx }) {
     const payload = extractUndoPayload<UndoPayload<SerializedGoodsReceipt>>(logEntry)
     const before = payload?.before ?? null
+    const after = payload?.after ?? null
     if (!before?.id) throw new Error('[internal] Missing previous goods receipt snapshot for undo')
     const { translate } = await resolveTranslations()
     const scope = requireUndoScope(ctx, before, translate)
 
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const receipt = await em.findOne(GoodsReceipt, {
-      id: before.id,
-      tenantId: scope.tenantId,
-      organizationId: scope.organizationId,
-    } as FilterQuery<GoodsReceipt>)
-    // Nothing to put back: the row is gone, so the update it recorded cannot be undone
-    // twice. Treat it as already undone rather than failing a retry.
-    if (!receipt) return
+    let receipt: GoodsReceipt | null = null
+    let alreadyRestored = false
 
-    const current = await em.find(GoodsReceiptLine, { goodsReceipt: receipt.id } as FilterQuery<GoodsReceiptLine>)
     await withAtomicFlush(
       em,
       [
-        () => {
-          for (const line of current) em.remove(line)
+        async () => {
+          receipt = await em.findOne(
+            GoodsReceipt,
+            {
+              id: before.id,
+              tenantId: scope.tenantId,
+              organizationId: scope.organizationId,
+            } as FilterQuery<GoodsReceipt>,
+            { lockMode: LockMode.PESSIMISTIC_WRITE },
+          )
+          if (!receipt) return
+          const lines = await findScopedLines(em, before.id, scope)
+          // A retry after a partial failure finds the snapshot already back in place;
+          // repeating the write — and its effects — would be the bug, not the fix.
+          if (aggregateMatchesSnapshot(receipt, lines, before)) {
+            alreadyRestored = true
+            return
+          }
+          assertUndoableState(receipt, lines, after, translate)
+          for (const line of lines) em.remove(line)
         },
         () => {
+          if (!receipt || alreadyRestored) return
           restoreHeaderFromSnapshot(receipt, before)
           em.persist(receipt)
-          for (const line of before.lines) {
-            em.persist(createLineFromSnapshot(em, receipt, before, line))
-          }
+          for (const line of before.lines) em.persist(createLineFromSnapshot(em, receipt, before, line))
         },
       ],
       { transaction: true },
     )
+
+    // Nothing to put back, or nothing left to do.
+    if (!receipt || alreadyRestored) return
 
     const dataEngine = ctx.container.resolve<DataEngine>('dataEngine')
     await emitCrudUndoSideEffects({
@@ -902,45 +998,46 @@ const deleteGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
     const { translate } = await resolveTranslations()
     const scope = ensureGoodsReceiptScope(ctx, translate)
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const { receipt, lines } = await loadDraftForWrite(em, ctx, scope, requireRecordId(rawInput, translate), translate)
-    return { before: serializeGoodsReceipt(receipt, lines) }
+    return { before: await readAggregateForSnapshot(em, scope, requireRecordId(rawInput, translate), translate) }
   },
   async execute(rawInput, ctx) {
     const { translate } = await resolveTranslations()
     const scope = ensureGoodsReceiptScope(ctx, translate)
     const id = requireRecordId(rawInput, translate)
+    const expectedVersion = requireExpectedVersion(ctx, translate)
 
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const { receipt } = await loadDraftForWrite(em, ctx, scope, id, translate)
+    let receipt!: GoodsReceipt
 
-    const dataEngine = ctx.container.resolve<DataEngine>('dataEngine')
-    const removed = assertFound(
-      await dataEngine.deleteOrmEntity({
-        entity: GoodsReceipt,
-        where: {
-          id,
-          tenantId: scope.tenantId,
-          organizationId: scope.organizationId,
-          deletedAt: null,
-        } as FilterQuery<GoodsReceipt>,
-        soft: true,
-        softDeleteField: 'deletedAt',
-      }),
-      translate('pz.goodsReceipts.errors.notFound', 'That goods receipt no longer exists.'),
-    )
-
-    await emitCrudSideEffects({
-      dataEngine,
+    await runCrudCommandWrite<GoodsReceipt>({
+      ctx,
+      em,
+      entityId: GOODS_RECEIPT_ENTITY_ID,
       action: 'deleted',
-      entity: removed,
-      identifiers: { id, tenantId: scope.tenantId, organizationId: scope.organizationId },
-      syncOrigin: ctx.syncOrigin,
+      scope,
       events: goodsReceiptCrudEvents,
       indexer: goodsReceiptCrudIndexer,
+      syncOrigin: ctx.syncOrigin,
+      phases: [
+        async ({ em: tx }) => {
+          receipt = await lockDraftForWrite(tx, scope, id, expectedVersion, translate)
+        },
+        ({ em: tx }) => {
+          // Soft, and inside the same transaction that verified the draft: the partial
+          // unique index stops seeing the row, so the Document Number is free again the
+          // moment this commits.
+          const now = new Date()
+          receipt.deletedAt = now
+          receipt.updatedAt = now
+          tx.persist(receipt)
+        },
+      ],
+      sideEffect: () => ({
+        entity: receipt,
+        identifiers: { id, tenantId: scope.tenantId, organizationId: scope.organizationId },
+      }),
     })
 
-    // The soft-deleted row keeps its lines; the unique index ignores it, so the document
-    // number is free again the moment this commits.
     return receipt
   },
   buildLog: async ({ snapshots, input }) => {
@@ -962,34 +1059,59 @@ const deleteGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
     const scope = requireUndoScope(ctx, before, translate)
 
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const receipt = await em.findOne(GoodsReceipt, {
-      id: before.id,
-      tenantId: scope.tenantId,
-      organizationId: scope.organizationId,
-    } as FilterQuery<GoodsReceipt>)
-    if (!receipt) return
-    // Already restored: undoing a delete twice must not re-emit effects.
-    if (receipt.deletedAt == null) return
+    let receipt: GoodsReceipt | null = null
+    let alreadyRestored = false
 
-    const existing = await em.find(GoodsReceiptLine, { goodsReceipt: receipt.id } as FilterQuery<GoodsReceiptLine>)
-    const present = new Set(existing.map((line) => String(line.id)))
-    await withAtomicFlush(
-      em,
-      [
-        () => {
-          receipt.deletedAt = null
-          restoreHeaderFromSnapshot(receipt, before)
-          em.persist(receipt)
-        },
-        () => {
-          for (const line of before.lines) {
-            if (present.has(line.id)) continue
-            em.persist(createLineFromSnapshot(em, receipt, before, line))
-          }
-        },
-      ],
-      { transaction: true },
-    )
+    try {
+      await withAtomicFlush(
+        em,
+        [
+          async () => {
+            receipt = await em.findOne(
+              GoodsReceipt,
+              {
+                id: before.id,
+                tenantId: scope.tenantId,
+                organizationId: scope.organizationId,
+              } as FilterQuery<GoodsReceipt>,
+              { lockMode: LockMode.PESSIMISTIC_WRITE },
+            )
+            if (!receipt) return
+            // Undoing a delete twice must not re-emit effects.
+            if (receipt.deletedAt == null) {
+              alreadyRestored = true
+              return
+            }
+            receipt.deletedAt = null
+            restoreHeaderFromSnapshot(receipt, before)
+            em.persist(receipt)
+          },
+          async () => {
+            if (!receipt || alreadyRestored) return
+            const present = new Set((await findScopedLines(em, before.id, scope)).map((line) => String(line.id)))
+            for (const line of before.lines) {
+              if (present.has(line.id)) continue
+              em.persist(createLineFromSnapshot(em, receipt, before, line))
+            }
+          },
+        ],
+        { transaction: true },
+      )
+    } catch (error) {
+      // Deleting a draft frees its Document Number, and someone may legitimately have
+      // taken it since. That is a real answer, not a write failure.
+      if (isUniqueViolation(error, DOCUMENT_NUMBER_UNIQUE_INDEX)) {
+        throw conflict(
+          translate(
+            'pz.goodsReceipts.errors.undoDocumentNumberTaken',
+            'This Document Number has been used by another goods receipt since, so this one cannot be restored.',
+          ),
+        )
+      }
+      throw error
+    }
+
+    if (!receipt || alreadyRestored) return
 
     const dataEngine = ctx.container.resolve<DataEngine>('dataEngine')
     await emitCrudUndoSideEffects({

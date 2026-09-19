@@ -133,6 +133,7 @@ export default function GoodsReceiptsTable() {
   )
 
   const columns = React.useMemo(() => buildColumns(t, locale), [locale, t])
+  const editHref = (row: GoodsReceiptRow) => `${GOODS_RECEIPTS_LIST_HREF}/${row.id}/edit`
   const canManage = useCanManageGoodsReceipts()
   const createLabel = t('pz.goodsReceipts.table.actions.create')
   // Offering a create action to someone the create page will refuse is a dead end, not a
@@ -190,26 +191,33 @@ export default function GoodsReceiptsTable() {
             actions={createAction}
           />
         )}
-        rowActions={(row) => (
-          <RowActions
-            items={[
-              {
-                id: 'pz.goodsReceipts.edit',
-                label: t('pz.goodsReceipts.table.actions.edit'),
-                href: `${GOODS_RECEIPTS_LIST_HREF}/${row.id}/edit`,
-              },
-              ...(canManage && row.status === 'draft'
-                ? [{
-                    id: 'pz.goodsReceipts.delete',
-                    label: t('pz.goodsReceipts.table.actions.delete'),
-                    destructive: true,
-                    onSelect: () => { void handleDelete(row) },
-                  }]
-                : []),
-            ]}
-          />
-        )}
-        onRowClick={(row) => router.push(`${GOODS_RECEIPTS_LIST_HREF}/${row.id}/edit`)}
+        rowActions={(row) => {
+          // Only offer what the row can actually do: the edit route refuses a confirmed
+          // document and a caller without the manage feature, so pointing at it anyway
+          // would just be a door that closes in the user's face.
+          const editable = canManage && row.status === 'draft'
+          if (!editable) return null
+          return (
+            <RowActions
+              items={[
+                {
+                  id: 'pz.goodsReceipts.edit',
+                  label: t('pz.goodsReceipts.table.actions.edit'),
+                  href: editHref(row),
+                },
+                {
+                  id: 'pz.goodsReceipts.delete',
+                  label: t('pz.goodsReceipts.table.actions.delete'),
+                  destructive: true,
+                  onSelect: () => { void handleDelete(row) },
+                },
+              ]}
+            />
+          )
+        }}
+        onRowClick={(row) => {
+          if (canManage && row.status === 'draft') router.push(editHref(row))
+        }}
         pagination={{
           page,
           pageSize: PAGE_SIZE,
