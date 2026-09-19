@@ -25,10 +25,17 @@ it writes nothing, the camera opens as the screen does: the warehouseman is alre
 holding the item, and a second tap to start the camera buys nothing. The barcode lookup
 is the receiving screen's own, so a code that names a product while counting a delivery
 names the same product here; stock comes from the installed WMS balances endpoint, which
-the Warehouseman role already reads through `wms.view`. The buckets that endpoint returns
-are summed per warehouse — a bin-level breakdown is not a question anyone holding a
-scanner is asking. Typing the code stays the path that always works: over plain http a
-phone has no secure context and therefore no camera at all.
+the Warehouseman role already reads through `wms.view`.
+
+The stock read is filtered to the warehouseman's **assigned warehouse**, which comes from
+the trusted session context and never from the client — the panel works one warehouse at
+a time, and an unfiltered read would put every warehouse's total under a header that names
+one. Somebody with no assignment is told the figure needs one rather than being shown a
+number that answers a different question. Within that warehouse the buckets are summed: a
+bin-level breakdown is not a question anyone holding a scanner is asking.
+
+Typing the code stays the path that always works: over plain http a phone has no secure
+context and therefore no camera at all.
 
 The header names the assigned warehouse and the signed-in person on every screen, and
 carries the sign-out control. A warehouseman with no assigned warehouse is told so and

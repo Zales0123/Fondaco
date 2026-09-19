@@ -11,19 +11,25 @@ import { fetchVariantStock, type ScannedProduct } from '../lib/productScanApi'
 import { formatStockQuantity } from '../lib/productScan'
 import { normalizeScannedCode, productLabel } from '../lib/receivingPanel'
 
+export type ProductScanProps = {
+  /** The signed-in warehouseman's own warehouse; null when nobody has assigned them one. */
+  warehouseId: string | null
+  warehouseName: string | null
+}
+
 /**
  * Scan a product, read what it is.
  *
- * The screen asks one question and answers it: what is this, and how many of them do we
- * have. It writes nothing, which is what lets the camera open the moment the screen does —
- * a warehouseman taps "Scan product" because they are already holding the item, and a
- * second tap to start the camera is a step that buys nothing.
+ * The screen asks one question and answers it: what is this, and how many of them are in
+ * this warehouse. It writes nothing, which is what lets the camera open the moment the
+ * screen does — a warehouseman taps "Scan product" because they are already holding the
+ * item, and a second tap to start the camera is a step that buys nothing.
  *
  * The barcode lookup is the same one the counting screen uses, so a code that names a
  * product while counting a delivery names the same product here. Stock is read separately
  * and is allowed to fail on its own: the product is the answer that was scanned for.
  */
-export function ProductScan() {
+export function ProductScan({ warehouseId, warehouseName }: ProductScanProps) {
   const t = useT()
   const [code, setCode] = React.useState('')
   const [scannerOpen, setScannerOpen] = React.useState(true)
@@ -49,12 +55,17 @@ export function ProductScan() {
       try {
         const variant = await resolveVariantByBarcode(scanned)
         let stock = null
-        try {
-          stock = await fetchVariantStock(variant.catalogVariantId)
-        } catch {
-          // The product is on the screen either way. A stock read that failed is reported
-          // as missing rather than as zero — zero is an answer, and the wrong one.
-          stock = null
+        // Without an assigned warehouse there is no stock question to answer. Falling back
+        // to every warehouse's total would put a number on the screen that answers a
+        // different question than the one the header says this panel is asking.
+        if (warehouseId) {
+          try {
+            stock = await fetchVariantStock(variant.catalogVariantId, warehouseId)
+          } catch {
+            // The product is on the screen either way. A stock read that failed is reported
+            // as missing rather than as zero — zero is an answer, and the wrong one.
+            stock = null
+          }
         }
         setResult({ variant, stock })
         setStatus(null)
@@ -73,7 +84,7 @@ export function ProductScan() {
         setLooking(false)
       }
     },
-    [t],
+    [t, warehouseId],
   )
 
   function onSubmit() {
@@ -123,7 +134,11 @@ export function ProductScan() {
       {result ? (
         <>
           <SectionLabel>{t('warehouseman.scan.result')}</SectionLabel>
-          <ScannedProductCard product={result} />
+          <ScannedProductCard
+            product={result}
+            hasWarehouse={warehouseId != null}
+            warehouseName={warehouseName}
+          />
         </>
       ) : !error ? (
         <ScreenEmpty
@@ -160,7 +175,16 @@ export function ProductScan() {
  * scanned at all; the name and SKU above them are how they check the camera read the label
  * they were pointing at. Nothing here is tappable — the screen changes no data.
  */
-function ScannedProductCard({ product }: { product: ScannedProduct }) {
+function ScannedProductCard({
+  product,
+  hasWarehouse,
+  warehouseName,
+}: {
+  product: ScannedProduct
+  /** Whether a warehouse was assigned at all, which is why a missing stock figure differs. */
+  hasWarehouse: boolean
+  warehouseName: string | null
+}) {
   const t = useT()
   const { variant, stock } = product
   return (
@@ -178,39 +202,31 @@ function ScannedProductCard({ product }: { product: ScannedProduct }) {
       </div>
 
       {stock ? (
-        <>
+        <div className="flex flex-col gap-2">
+          {/* The header names the warehouse too, but the number needs it beside it: a
+              stock figure read without knowing where it is counted is worse than none. */}
+          {warehouseName ? (
+            <p className="text-base text-muted-foreground">
+              {t('warehouseman.scan.stock.inWarehouse', undefined, { warehouse: warehouseName })}
+            </p>
+          ) : null}
           <div className="grid grid-cols-2 gap-3">
             <StatTile
               label={t('warehouseman.scan.stock.label')}
-              value={formatStockQuantity(stock.totalOnHand)}
-              // Nothing on the shelf is the answer somebody has to act on, so it is the one
-              // the screen says out loud rather than leaving as a quiet zero.
-              tone={stock.totalOnHand > 0 ? 'neutral' : 'error'}
+              value={formatStockQuantity(stock.onHand)}
             />
             <StatTile
               label={t('warehouseman.scan.stock.availableLabel')}
-              value={formatStockQuantity(stock.totalAvailable)}
+              value={formatStockQuantity(stock.available)}
             />
           </div>
-
-          {stock.byWarehouse.length > 0 ? (
-            <ul className="flex flex-col gap-2">
-              {stock.byWarehouse.map((entry) => (
-                <li
-                  key={entry.warehouseId}
-                  className="flex items-center justify-between gap-4 border-t-2 border-border pt-2 text-lg"
-                >
-                  <span className="min-w-0 truncate text-muted-foreground">{entry.warehouseLabel}</span>
-                  <span className="font-mono font-bold">{formatStockQuantity(entry.onHand)}</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-base text-muted-foreground">{t('warehouseman.scan.stock.none')}</p>
-          )}
-        </>
+        </div>
       ) : (
-        <ScreenWarning>{t('warehouseman.scan.stock.unavailable')}</ScreenWarning>
+        <ScreenWarning>
+          {hasWarehouse
+            ? t('warehouseman.scan.stock.unavailable')
+            : t('warehouseman.scan.stock.noWarehouse')}
+        </ScreenWarning>
       )}
     </PanelCard>
   )

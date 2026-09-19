@@ -12,7 +12,9 @@ export default async function ScanPage() {
       backHref="/warehouseman"
       backLabelKey="warehouseman.panel.backToHome"
     >
-      <ProductScan />
+      {/* The warehouse comes from the trusted session context, never from the client: it is
+          what the stock read is filtered by, and the panel answers for one warehouse. */}
+      <ProductScan warehouseId={warehouse?.id ?? null} warehouseName={warehouse?.name ?? null} />
     </PanelShell>
   )
 }
