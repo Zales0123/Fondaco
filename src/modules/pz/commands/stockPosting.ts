@@ -16,8 +16,14 @@ import { GoodsReceipt, type StockPostingFailureReason } from '../data/entities'
 import { loadWarehouseDestinations } from '../lib/destinations'
 import { loadCountedLines } from '../lib/receivingConfirmation'
 import { aggregatePostableQuantities, type PostableQuantity } from '../lib/stockPosting'
+import {
+  describePostedLines,
+  type GoodsReceiptStockPostedPayload,
+  type PostedStockLine,
+} from '../lib/stockPostedNotifications'
 import type { TranslateFn } from '../lib/goodsReceiptInput'
 import { quantityToNumber } from '../lib/quantity'
+import type { EventBus } from '@open-mercato/events'
 import {
   GOODS_RECEIPT_ENTITY_ID,
   goodsReceiptCrudEvents,
@@ -33,6 +39,15 @@ const logger = createLogger('pz').child({ component: 'stock-posting' })
  * what ADR-0005 named when it left this seam open.
  */
 export const STOCK_POSTING_REFERENCE_TYPE = 'manual' as const
+
+/**
+ * What one posting run did. The public result is the API's shape; the posted lines stay
+ * internal, because the only thing that reads them is the event emitted a few lines later.
+ */
+type StockPostingRun = {
+  result: StockPostingResult
+  postedLines: PostedStockLine[]
+}
 
 export type StockPostingResult = {
   id: string
@@ -71,6 +86,7 @@ const postStockCommand: CommandHandler<Record<string, unknown>, StockPostingResu
 
     let receipt!: GoodsReceipt
     let outcome: StockPostingResult = { id: input.id, status: 'posted', posted: 0, reason: null }
+    let postedLines: PostedStockLine[] = []
 
     await runCrudCommandWrite<GoodsReceipt>({
       ctx,
@@ -114,7 +130,9 @@ const postStockCommand: CommandHandler<Record<string, unknown>, StockPostingResu
           }
         },
         async ({ em: tx }) => {
-          outcome = await postCountedGoods(ctx, tx, scope, receipt)
+          const run = await postCountedGoods(ctx, tx, scope, receipt)
+          outcome = run.result
+          postedLines = run.postedLines
           receipt.stockPostingStatus = outcome.status
           receipt.stockPostedAt = outcome.status === 'posted' ? new Date() : null
           receipt.stockPostingError = outcome.reason
@@ -127,6 +145,8 @@ const postStockCommand: CommandHandler<Record<string, unknown>, StockPostingResu
         identifiers: { id: input.id, tenantId: scope.tenantId, organizationId: scope.organizationId },
       }),
     })
+
+    await emitStockPosted(ctx, scope, receipt, postedLines)
 
     return outcome
   },
@@ -256,31 +276,39 @@ async function postCountedGoods(
   em: EntityManager,
   scope: GoodsReceiptScope,
   receipt: GoodsReceipt,
-): Promise<StockPostingResult> {
+): Promise<StockPostingRun> {
   const id = String(receipt.id)
   const destinationLocationId = receipt.stockPostingLocationId
   const performedBy = receipt.confirmedBy ?? (typeof ctx.auth?.sub === 'string' ? ctx.auth.sub : null)
-  const postable = aggregatePostableQuantities(await loadCountedLines(em, scope, id))
+  const counted = await loadCountedLines(em, scope, id)
+  const postable = aggregatePostableQuantities(counted)
 
-  if (postable.length === 0) return { id, status: 'posted', posted: 0, reason: null }
+  if (postable.length === 0) {
+    return { result: { id, status: 'posted', posted: 0, reason: null }, postedLines: [] }
+  }
   if (!destinationLocationId || !performedBy) {
     logger.error('Goods receipt stock posting is missing what the movement needs', {
       goodsReceiptId: id,
       hasDestination: Boolean(destinationLocationId),
       hasPerformer: Boolean(performedBy),
     })
-    return { id, status: 'failed', posted: 0, reason: 'destination_unusable' }
+    return {
+      result: { id, status: 'failed', posted: 0, reason: 'destination_unusable' },
+      postedLines: [],
+    }
   }
 
   const commandBus = ctx.container.resolve<CommandBus>('commandBus')
-  let posted = 0
+  // Collected as they land rather than sliced off `postable` afterwards, so a run that stops
+  // halfway reports exactly the variants that reached stock.
+  const landed: PostableQuantity[] = []
   for (const entry of postable) {
     try {
       await commandBus.execute('wms.inventory.receive', {
         input: buildReceiveInput(receipt, scope, destinationLocationId, performedBy, entry),
         ctx: buildWmsContext(ctx, scope),
       })
-      posted += 1
+      landed.push(entry)
     } catch (error) {
       const reason = terminalFailureReason(error)
       if (!reason) throw error
@@ -290,10 +318,16 @@ async function postCountedGoods(
         catalogVariantId: entry.catalogVariantId,
         reason,
       })
-      return { id, status: 'failed', posted, reason }
+      return {
+        result: { id, status: 'failed', posted: landed.length, reason },
+        postedLines: describePostedLines(landed, counted),
+      }
     }
   }
-  return { id, status: 'posted', posted, reason: null }
+  return {
+    result: { id, status: 'posted', posted: landed.length, reason: null },
+    postedLines: describePostedLines(landed, counted),
+  }
 }
 
 function buildReceiveInput(
@@ -346,6 +380,45 @@ function terminalFailureReason(error: unknown): StockPostingFailureReason | null
   // Every other refusal `wms` states is still a refusal: repeating it unchanged would be
   // refused again, so it is recorded rather than retried forever.
   return error.status >= 400 && error.status < 500 ? 'posting_rejected' : null
+}
+
+/**
+ * Emitted after the commit, for the same reason `pz.goods_receipt.confirmed` is: an effect
+ * must never fire for a posting the database did not keep. It is persistent because a bell
+ * lost to a momentarily unavailable worker is a delivery whose stock silently moved.
+ *
+ * A run that posted nothing says nothing. A run that posted part of a delivery before `wms`
+ * refused the rest still announces the part that landed — that stock really is on a shelf,
+ * and the failure has its own banner and retry on the document.
+ *
+ * The commit has already landed by the time this runs, so a failed broadcast cannot be
+ * turned into a failed request: the goods ARE in stock, and telling the caller otherwise
+ * would be the worse lie. It is logged at error and is the signal to replay from the record.
+ */
+async function emitStockPosted(
+  ctx: CommandRuntimeContext,
+  scope: GoodsReceiptScope,
+  receipt: GoodsReceipt,
+  postedLines: PostedStockLine[],
+): Promise<void> {
+  if (postedLines.length === 0) return
+  const payload: GoodsReceiptStockPostedPayload = {
+    id: String(receipt.id),
+    tenantId: scope.tenantId,
+    organizationId: scope.organizationId,
+    documentNumber: receipt.documentNumber,
+    postedLines,
+  }
+  try {
+    const bus = ctx.container.resolve<EventBus>('eventBus')
+    await bus.emit('pz.goods_receipt.stock_posted', payload, {
+      persistent: true,
+      tenantId: scope.tenantId,
+      organizationId: scope.organizationId,
+    })
+  } catch (error) {
+    logger.error('Goods receipt stock posting broadcast failed', { err: error, goodsReceiptId: payload.id })
+  }
 }
 
 registerCommand(postStockCommand)

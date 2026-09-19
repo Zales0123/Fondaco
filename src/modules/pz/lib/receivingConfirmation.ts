@@ -49,10 +49,12 @@ export type ConfirmationAssessment = {
   palletsOpen: number
 }
 
-type CountedLine = {
+export type CountedLine = {
   catalogVariantId: string
   quantity: string
   name: string | null
+  /** The SKU the variant was counted under; the notification a posting raises names it. */
+  sku: string | null
 }
 
 /**
@@ -82,6 +84,7 @@ export async function loadCountedLines(
     catalogVariantId: line.catalogVariantId,
     quantity: line.quantity,
     name: line.catalogSnapshot?.name ?? null,
+    sku: line.catalogSnapshot?.sku ?? null,
   }))
 }
 

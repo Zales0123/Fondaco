@@ -1,4 +1,5 @@
 {
+  "notifications.categories.pz": "Goods receipts",
   "pz.audit.goodsReceipts.confirm": "Confirm goods receipt order",
   "pz.audit.goodsReceipts.create": "Create goods receipt order",
   "pz.audit.goodsReceipts.delete": "Delete goods receipt order",
@@ -180,6 +181,10 @@
   "pz.goodsReceipts.view.snapshotNote": "Shown as recorded when the document was created and confirmed, so it does not change when the catalog or a warehouse does.",
   "pz.goodsReceipts.view.title": "Goods receipt order {documentNumber}",
   "pz.goodsReceipts.view.unknownProduct": "Product no longer in the catalog",
+  "pz.notifications.stockPosted.body": "{quantity} × {product} went into stock from delivery {documentNumber}.",
+  "pz.notifications.stockPosted.description": "One notification per product whose stock a confirmed delivery updated.",
+  "pz.notifications.stockPosted.label": "Stock posted from a delivery",
+  "pz.notifications.stockPosted.title": "Stock updated: {sku}",
   "pz.palletLines.errors.barcodeRequired": "Scan or type a barcode.",
   "pz.palletLines.errors.countFailed": "The count could not be recorded.",
   "pz.palletLines.errors.deleteFailed": "The counted product could not be removed.",
