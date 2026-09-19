@@ -424,6 +424,7 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
         success: t('warehouseman.receiving.count.print.success'),
         failure: (reason) => t('warehouseman.receiving.count.print.failed', undefined, { reason }),
         unknownReason: t('warehouseman.receiving.print.unknownReason'),
+        timedOutReason: t('warehouseman.receiving.print.timedOut'),
       }),
       palletId,
     })

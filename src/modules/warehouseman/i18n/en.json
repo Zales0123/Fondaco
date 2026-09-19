@@ -119,6 +119,7 @@
   "warehouseman.receiving.pallets.scanner.title": "Scan the pallet label",
   "warehouseman.receiving.pallets.screenTitle": "Pallets",
   "warehouseman.receiving.pallets.title": "Pallets · {documentNumber}",
+  "warehouseman.receiving.print.timedOut": "the printer did not answer in time",
   "warehouseman.receiving.print.unknownReason": "the printer did not say why",
   "warehouseman.receiving.summary.backToPallets": "Back to pallets",
   "warehouseman.receiving.summary.screenTitle": "Summary",

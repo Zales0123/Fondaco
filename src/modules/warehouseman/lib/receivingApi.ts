@@ -91,12 +91,14 @@ async function send<T>(
   method: 'POST' | 'PUT' | 'DELETE',
   body: Record<string, unknown>,
   expectedVersion?: string | null,
+  signal?: AbortSignal,
 ): Promise<T> {
   return withScopedApiRequestHeaders(buildOptimisticLockHeader(expectedVersion), async () => {
     const call = await apiCall<T>(url, {
       method,
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
+      signal,
     })
     if (!call.ok) throw toApiError(call.status, call.result)
     return call.result as T
@@ -144,16 +146,44 @@ export async function findPalletByCode(code: string, goodsReceiptId: string): Pr
 const PALLET_LABEL_SCOPE = 'pz.pallet'
 
 /**
+ * Last resort against a request that never comes back.
+ *
+ * This is a backstop, not a patience setting: it stays ABOVE what the route can
+ * legitimately take, so it does not abandon a slow print that is about to
+ * succeed and report a failure for a label that did come out. The service
+ * bounds itself at `openTimeoutMs` (30s) + `jobTimeoutMs` (60s) +
+ * `closeTimeoutMs` (5s) = 95s, and the rest is slack for the work the route
+ * does outside those bounds — resolving the label subject from the database,
+ * rendering the barcode and rasterizing it. That slack is generous rather than
+ * derived: those steps are sub-second in practice, so this cannot be a proof,
+ * only a margin wide enough that hitting it means a hang.
+ *
+ * It does not make the wait pleasant — a dead printer still stalls the screen for
+ * a minute and a half. Fixing that means not awaiting the print at all, which is
+ * a change to when the effect runs, not to this bound.
+ */
+const PRINT_REQUEST_TIMEOUT_MS = 105_000
+
+/**
  * Prints one pallet's label on the NiimBot. The printer is an exclusive resource, so a
  * concurrent job is refused with 409 and an unreachable one with 503; both arrive here as a
  * `ReceivingApiError` carrying the server's already-localized text. Every caller treats that
  * as a warning about the sticker — the pallet it belongs to is already committed.
+ *
+ * A silent request is the one case that is not a `ReceivingApiError`: it surfaces as the
+ * abort's own `TimeoutError`, which callers report through their unknown-reason wording.
  */
-export async function printPalletLabel(palletId: string): Promise<void> {
-  await send<{ ok: true; message: string }>('/api/label_printing/print-label', 'POST', {
-    scope: PALLET_LABEL_SCOPE,
-    id: palletId,
-  })
+export async function printPalletLabel(
+  palletId: string,
+  timeoutMs: number = PRINT_REQUEST_TIMEOUT_MS,
+): Promise<void> {
+  await send<{ ok: true; message: string }>(
+    '/api/label_printing/print-label',
+    'POST',
+    { scope: PALLET_LABEL_SCOPE, id: palletId },
+    null,
+    AbortSignal.timeout(timeoutMs),
+  )
 }
 
 export async function closePallet(id: string, expectedVersion: string | null): Promise<PalletWriteResult> {

@@ -113,4 +113,120 @@ describe('createLabelPrinterService', () => {
     await expect(service.printImage(tooWide)).rejects.toBeInstanceOf(RasterizeError)
     expect(opened).toBe(false)
   })
+
+  /**
+   * A wedged Bluetooth link does not fail — it stops answering. Every timeout in
+   * `niimbotPrinter` is a check between awaits, so control never returns to it and
+   * nothing here is bounded unless the service itself holds a real timer.
+   */
+  it('rejects instead of hanging when the port never opens', async () => {
+    const service = createLabelPrinterService({
+      config: { ...config, openTimeoutMs: 20 },
+      openTransport: () => new Promise<SerialTransport>(() => {}),
+    })
+
+    await expect(service.printImage(await readFile(assetPath))).rejects.toMatchObject({
+      code: 'printer-unavailable',
+    })
+  })
+
+  it('rejects instead of hanging when a write never completes', async () => {
+    const printer = createFakePrinter()
+    const service = createLabelPrinterService({
+      config: { ...config, jobTimeoutMs: 20 },
+      openTransport: async () => ({
+        write: () => new Promise<void>(() => {}),
+        onData: (listener) => printer.transport.onData(listener),
+        close: () => printer.transport.close(),
+      }),
+    })
+
+    await expect(service.printImage(await readFile(assetPath))).rejects.toMatchObject({
+      code: 'printer-timeout',
+    })
+    expect(printer.closed).toBe(true)
+  })
+
+  /**
+   * The lock only resets in a `finally`, so a job that never settles holds it for
+   * the life of the process — and the runner is process-wide. One wedged label
+   * would answer every later print, in every tenant, with 409 until a restart.
+   */
+  it('releases the lock after a stalled job times out', async () => {
+    const working = createFakePrinter()
+    let stall = true
+    const service = createLabelPrinterService({
+      // One bound covers both legs: tight enough that the stall fails fast,
+      // wide enough that the real print behind it is not racing the clock.
+      config: { ...config, jobTimeoutMs: 250 },
+      openTransport: async () => {
+        if (!stall) return working.transport
+        return {
+          write: () => new Promise<void>(() => {}),
+          onData: () => {},
+          close: async () => {},
+        }
+      },
+    })
+    const image = await readFile(assetPath)
+
+    await expect(service.printImage(image)).rejects.toMatchObject({ code: 'printer-timeout' })
+
+    stall = false
+    await expect(service.printImage(image)).resolves.toBeUndefined()
+    expect(working.received.length).toBeGreaterThan(0)
+  })
+
+  /**
+   * The close runs inside the lock and talks to the same handle the job wedged
+   * on — `port.close()` drains pending output, so it can block exactly where
+   * the write did. Unbounded it never settles, so `runExclusive` never reaches
+   * its `finally` and the process-wide lock is held for good.
+   */
+  it('releases the lock even when closing the port never settles', async () => {
+    const working = createFakePrinter()
+    let wedged = true
+    const service = createLabelPrinterService({
+      config: { ...config, jobTimeoutMs: 250, closeTimeoutMs: 20 },
+      openTransport: async () => {
+        if (!wedged) return working.transport
+        return {
+          write: () => new Promise<void>(() => {}),
+          onData: () => {},
+          close: () => new Promise<void>(() => {}),
+        }
+      },
+    })
+    const image = await readFile(assetPath)
+
+    await expect(service.printImage(image)).rejects.toMatchObject({ code: 'printer-timeout' })
+
+    wedged = false
+    await expect(service.printImage(image)).resolves.toBeUndefined()
+    expect(working.received.length).toBeGreaterThan(0)
+  })
+
+  /**
+   * A port that opens after the deadline still holds the device. Leaving it
+   * orphaned turns one 503 into a permanent one, because nothing else can open
+   * the same path.
+   */
+  it('closes a port that finishes opening after the deadline', async () => {
+    const late = createFakePrinter()
+    const service = createLabelPrinterService({
+      config: { ...config, openTimeoutMs: 20 },
+      openTransport: () =>
+        new Promise<SerialTransport>((resolve) => {
+          setTimeout(() => resolve(late.transport), 60)
+        }),
+    })
+
+    await expect(service.printImage(await readFile(assetPath))).rejects.toMatchObject({
+      code: 'printer-unavailable',
+    })
+
+    expect(late.closed).toBe(false)
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    expect(late.closed).toBe(true)
+  })
 })

@@ -93,6 +93,7 @@ export function ReceivingPallets({ receiptId }: ReceivingPalletsProps) {
           success: t('warehouseman.receiving.pallets.print.success'),
           failure: (reason) => t('warehouseman.receiving.pallets.print.failed', undefined, { reason }),
           unknownReason: t('warehouseman.receiving.print.unknownReason'),
+          timedOutReason: t('warehouseman.receiving.print.timedOut'),
         }),
       )
       queryClient.invalidateQueries({ queryKey: ['warehouseman.receiving.pallets', receiptId] })

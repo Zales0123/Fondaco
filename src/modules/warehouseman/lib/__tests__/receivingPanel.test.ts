@@ -148,7 +148,21 @@ describe('describePalletPrintOutcome', () => {
     success: 'The pallet label is printing.',
     failure: (reason: string) => `The pallet is there, the label is not: ${reason}`,
     unknownReason: 'The printer did not say why.',
+    timedOutReason: 'The printer did not answer in time.',
   }
+
+  /**
+   * A timeout is the one failure the server never worded, so its message is the
+   * browser's own untranslated English. Printing that to the floor would put
+   * "The operation timed out." in front of a Polish warehouseman.
+   */
+  it('words a silent printer itself rather than leaking the abort message', () => {
+    const timedOut = new DOMException('The operation timed out.', 'TimeoutError')
+    expect(describePalletPrintOutcome(timedOut, messages)).toEqual({
+      kind: 'warning',
+      message: 'The pallet is there, the label is not: The printer did not answer in time.',
+    })
+  })
 
   it('reports a printed label as a success', () => {
     expect(describePalletPrintOutcome(null, messages)).toEqual({

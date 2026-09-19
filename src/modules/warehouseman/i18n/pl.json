@@ -119,6 +119,7 @@
   "warehouseman.receiving.pallets.scanner.title": "Zeskanuj etykietę nośnika",
   "warehouseman.receiving.pallets.screenTitle": "Nośniki",
   "warehouseman.receiving.pallets.title": "Nośniki · {documentNumber}",
+  "warehouseman.receiving.print.timedOut": "drukarka nie odpowiedziała na czas",
   "warehouseman.receiving.print.unknownReason": "drukarka nie podała powodu",
   "warehouseman.receiving.summary.backToPallets": "Wróć do nośników",
   "warehouseman.receiving.summary.screenTitle": "Podsumowanie",

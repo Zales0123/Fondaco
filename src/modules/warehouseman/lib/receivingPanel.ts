@@ -130,6 +130,22 @@ function readFailureMessage(error: unknown): string {
   return error.message.trim()
 }
 
+/**
+ * The name `AbortSignal.timeout()` rejects with once the request outlives its bound.
+ *
+ * Matched on the name alone rather than `instanceof Error`: the rejection is a
+ * `DOMException` built by the platform, so it can come from another realm — a
+ * worker, an iframe, a test sandbox — where `instanceof` is false against a
+ * structurally identical error.
+ */
+function isTimeoutError(error: unknown): boolean {
+  return (
+    typeof error === 'object'
+    && error !== null
+    && (error as { name?: unknown }).name === 'TimeoutError'
+  )
+}
+
 export type PalletLabelNoticeKind = 'success' | 'warning'
 
 /** What the floor is told about a label, never about the pallet it belongs to. */
@@ -147,9 +163,20 @@ export type PalletLabelNotice = { kind: PalletLabelNoticeKind; message: string }
  */
 export function describePalletPrintOutcome(
   error: unknown,
-  messages: { success: string; failure: (reason: string) => string; unknownReason: string },
+  messages: {
+    success: string
+    failure: (reason: string) => string
+    unknownReason: string
+    timedOutReason: string
+  },
 ): PalletLabelNotice {
   if (error == null) return { kind: 'success', message: messages.success }
+  // Every other refusal carries the server's own localized text. A timeout does
+  // not: nothing answered, so the only message available is the browser's
+  // untranslated one, and the floor must never be shown that.
+  if (isTimeoutError(error)) {
+    return { kind: 'warning', message: messages.failure(messages.timedOutReason) }
+  }
   return { kind: 'warning', message: messages.failure(readFailureMessage(error) || messages.unknownReason) }
 }
 
