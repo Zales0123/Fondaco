@@ -27,6 +27,80 @@ destination is that variant's **product**.
 
 The page requires `catalog.products.view`, matching what the API enforces.
 
+## Two modes: one-shot and continuous
+
+`BarcodeScannerDialog` defaults to **one-shot**: the first successful decode
+stops the camera, shows "Barcode captured", fires `onDetected` and offers
+"Scan again". That is right for scanning *one* thing — a product barcode, a
+pallet label — because the next step is navigating somewhere.
+
+`continuous` flips it for callers that **count**. The camera stays on, the poll
+loop keeps running, and `onDetected` fires once per accepted scan. Nothing about
+the one-shot path changes; every new prop is optional and defaults to today's
+behaviour.
+
+| Prop | Default | Effect |
+|---|---|---|
+| `continuous` | `false` | Keeps scanning; adds a full-width **Done** button, because the dialog no longer closes itself. |
+| `log` | `undefined` | Running history, **newest entry first** — the natural shape of `[entry, ...previous]`. The first five render under the video in that order, each with a check/cross icon so the outcome never rests on colour alone. |
+| `interruption` | `undefined` | A step that must be answered before scanning continues. Takes over the dialog body and **suspends acceptance entirely**. |
+
+### `interruption`: the caller needs an answer before the next scan
+
+Some callers cannot act on a code alone. Counting a delivery is the example:
+the code names *which* product, but not *how many*, and one scan should be able
+to mean a carton of twenty-four rather than one box presented twenty-four times.
+
+So the caller renders its own question — `warehouseman`'s is
+`components/ScanQuantityStep.tsx` — and hands it over as a node. The dialog
+knows nothing about what is being asked. It owns exactly one rule: **while an
+interruption is up, nothing is scanned.** Concretely that means the poll loop
+returns before reading the frame, the manual-entry field is hidden and its
+Cmd/Ctrl+Enter is refused, and the Done button is out of reach.
+
+Two details are load-bearing:
+
+- **The `<video>` element is hidden, never unmounted.** It holds the live
+  `MediaStream`. Dropping it would stop the camera and make every counted item
+  pay a fresh `getUserMedia` start — one to two seconds, per carton. This is
+  also why the step is not a second stacked dialog.
+- **The repeat-rule state is frozen**, not advanced — neither a decode nor an
+  empty frame is observed, exactly as while `busy`. See the ADR note below.
+
+### When does the same barcode count twice?
+
+> Under `interruption`, "after the step closes *and* the code has since left the
+> frame". The freeze is what makes that true: a carton still in front of the lens
+> when the step closes is the one just counted, not a new one, and lowering the
+> device to tap `+10` must not be read as it leaving. See `docs/adr/0011` and
+> `docs/adr/0012`.
+
+Counting a pallet means scanning **twenty identical cartons in a row**, and
+every one of them has to count — so "ignore the same code for N milliseconds"
+would silently swallow most of a delivery. `lib/scanStream.ts` implements the
+rule that replaces it, as a pure state machine (see
+`docs/adr/0011-a-repeated-scan-counts-again-only-after-the-code-leaves-the-frame.md`):
+
+- a **different** value than the last accepted one counts immediately;
+- the **same** value counts again only once `EMPTY_TICKS_TO_CLEAR` (3) poll
+  ticks *in a row* have decoded nothing — the code physically left the frame,
+  as opposed to one blurred look at a label still sitting there — **and**
+  `SCAN_REPEAT_COOLDOWN_MS` (900 ms) has passed since the last acceptance. Any
+  decode resets the run of empty ticks.
+
+Acceptance is suspended entirely while the caller reports `busy`, so a slow
+round trip cannot queue ten counts off one carton held in front of the lens.
+
+### Feedback
+
+The operator looks at the pallet, not at the screen, so each accepted scan gets
+a 250 ms success ring on the video plus `lib/scanFeedback.ts` — an ~880 Hz,
+60 ms WebAudio blip and a 40 ms `navigator.vibrate`. Both channels are
+best-effort and independently guarded: a laptop with no vibration motor, a
+browser that blocks audio, or a device with neither still counts cartons, and
+`playScanFeedback()` never throws. The audio context is created lazily and
+reused, because browsers cap how many a page may hold.
+
 ## Detector: native first, WASM fallback
 
 `globalThis.BarcodeDetector` is used when present (Chrome/Edge on Android and

@@ -63,11 +63,39 @@ export function parseCountQuantity(raw: string): string | null {
   return `${integer || '0'}.${fraction}`
 }
 
+/**
+ * Blank means one unit: a scan is the gesture that says "one more of these". The quantity
+ * field is therefore a multiplier rather than a required entry — left alone a scan adds one,
+ * filled with 12 a scan adds twelve — and only something that was actually typed can still
+ * be refused, which is why anything non-blank goes back through `parseCountQuantity`.
+ */
+export function resolveCountQuantity(raw: string): string | null {
+  if (!raw.trim()) return `1.${'0'.repeat(COUNT_QUANTITY_SCALE)}`
+  return parseCountQuantity(raw)
+}
+
 /** Trailing zeros are storage precision, not something to read back to somebody counting. */
 export function formatCountQuantity(raw: string): string {
   if (!/^\d+\.\d+$/.test(raw)) return raw
   return raw.replace(/\.?0+$/, '') || '0'
 }
+
+/** The smallest a confirmed scan can be: the scan itself asserts the product is there. */
+export const MIN_SCAN_QUANTITY = 1
+
+/**
+ * Moves the pending scan's quantity by one of the step buttons.
+ *
+ * Clamping at one rather than zero is the whole reason this is a function. Coming back down
+ * from an overshoot with −10 is ordinary — the floor taps `+10` twice, sees 21, and corrects —
+ * and landing on 0 or −7 would put a count on screen that the server is bound to refuse,
+ * discovered only after the button is pressed. A gloved thumb overshooting is expected input,
+ * not a mistake to punish.
+ */
+export function adjustScanQuantity(current: number, delta: number): number {
+  return Math.max(MIN_SCAN_QUANTITY, current + delta)
+}
+
 
 /**
  * Every `pz` refusal carries an already-localized `error`. Printing it is the only way the
@@ -87,4 +115,55 @@ export function resolveApiMessage(payload: unknown, fallback: string): string {
  */
 export function productLabel(name: string | null | undefined, fallback: string): string {
   return name && name.trim() ? name : fallback
+}
+
+/** A refusal the `pz` and `label_printing` APIs throw: an Error carrying the HTTP status. */
+function readFailureStatus(error: unknown): number | null {
+  if (!error || typeof error !== 'object') return null
+  const status = (error as { status?: unknown }).status
+  return typeof status === 'number' ? status : null
+}
+
+/** The server text is already localized, so it beats every key the panel owns. */
+function readFailureMessage(error: unknown): string {
+  if (!(error instanceof Error)) return ''
+  return error.message.trim()
+}
+
+export type PalletLabelNoticeKind = 'success' | 'warning'
+
+/** What the floor is told about a label, never about the pallet it belongs to. */
+export type PalletLabelNotice = { kind: PalletLabelNoticeKind; message: string }
+
+/**
+ * Classifies a label print. Printing is a post-commit effect — the pallet is committed
+ * before the printer is ever asked — so a printer that is off, busy, faulty or has nothing
+ * to print can only ever produce a warning about the sticker. There is deliberately no
+ * failure kind here: "creating the pallet failed" is not an outcome this can express.
+ *
+ * `failure` frames the reason the printer gave, so the screen that just created a pallet
+ * can say the pallet is there and the sticker is not, while a reprint only reports the
+ * printer. `error` is `null` for a print that went through.
+ */
+export function describePalletPrintOutcome(
+  error: unknown,
+  messages: { success: string; failure: (reason: string) => string; unknownReason: string },
+): PalletLabelNotice {
+  if (error == null) return { kind: 'success', message: messages.success }
+  return { kind: 'warning', message: messages.failure(readFailureMessage(error) || messages.unknownReason) }
+}
+
+/**
+ * What the floor is told when opening a pallet by its code fails. Typed and scanned codes
+ * share it: a camera must never be refused on different terms than a keyboard.
+ *
+ * A code nobody has is named as such; every other refusal prints the server's own text,
+ * which is what names the other document a pallet belongs to.
+ */
+export function describePalletLookupFailure(
+  error: unknown,
+  messages: { notFound: string; failed: string },
+): string {
+  if (readFailureStatus(error) === 404) return messages.notFound
+  return readFailureMessage(error) || messages.failed
 }

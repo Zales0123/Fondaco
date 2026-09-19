@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { Camera, Flashlight, FlashlightOff, RefreshCw, ScanLine } from 'lucide-react'
+import { Camera, Check, Flashlight, FlashlightOff, RefreshCw, ScanLine, X } from 'lucide-react'
 import {
   BarcodeDetector as BarcodeDetectorPonyfill,
   prepareZXingModule,
@@ -21,6 +21,28 @@ import { Label } from '@open-mercato/ui/primitives/label'
 import { Spinner } from '@open-mercato/ui/primitives/spinner'
 import { cn } from '@open-mercato/shared/lib/utils'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { resolveScannerLabels } from '../lib/scannerLabels'
+import { playScanFeedback } from '../lib/scanFeedback'
+import {
+  createScanStreamState,
+  observeEmptyFrame,
+  observeScan,
+  type ScanStreamState,
+} from '../lib/scanStream'
+
+/**
+ * One line of the running scan history a continuous caller renders under the
+ * video. The dialog owns no history of its own — only the caller knows whether
+ * a code turned into a counted carton or into a rejection.
+ */
+export type ScannerLogEntry = {
+  /** Stable React key; the caller's own id for the attempt. */
+  id: string
+  /** Already-translated line, e.g. "Carton 12 — 5901234123457". */
+  label: string
+  /** Whether the attempt succeeded. Drives both the icon and the colour. */
+  tone: 'success' | 'error'
+}
 
 export type BarcodeScannerDialogProps = {
   /** Controls visibility. When false the camera MUST be fully released. */
@@ -35,10 +57,59 @@ export type BarcodeScannerDialogProps = {
   statusMessage?: string | null
   /** Optional error rendered by the parent (e.g. "No variant matches this barcode."). */
   errorMessage?: string | null
+  // Wording overrides for callers that scan something other than a product
+  // barcode (e.g. a pallet label). Already-translated strings — the caller owns
+  // its own `useT()`. Omitted or blank keeps the product-barcode copy.
+  /** Dialog heading. */
+  title?: string
+  /** Line under the heading. */
+  description?: string
+  /** Manual-entry field label. */
+  manualLabel?: string
+  /** Manual-entry field placeholder. */
+  manualPlaceholder?: string
+  /**
+   * Keep scanning instead of stopping at the first code.
+   *
+   * A one-shot scan identifies one thing (a pallet label, a product), so the
+   * camera goes off the moment it succeeds. Counting a delivery is the
+   * opposite: forty cartons in a row, one-handed, eyes on the pallet — a
+   * camera restart per item is unusable. In continuous mode the poll loop
+   * keeps running and `onDetected` fires once per accepted scan, with repeats
+   * ruled by `lib/scanStream`. The dialog then never closes itself; the Done
+   * button calls `onClose`.
+   */
+  continuous?: boolean
+  /**
+   * Running history rendered under the video, **newest entry first** — the
+   * five most recent are shown, in that order. Omitted renders nothing.
+   */
+  log?: ScannerLogEntry[]
+  /**
+   * A step the caller needs answered before scanning may continue — rendered
+   * in place of the preview and the manual-entry field, filling the dialog.
+   *
+   * While this is non-null **no scan is accepted**, and the repeat-rule state
+   * is frozen rather than advanced: neither a decode nor an empty frame is
+   * observed, exactly as while `busy`. That is what makes the step safe to
+   * leave up. Without the freeze, a carton still sitting in front of the lens
+   * when the step closes would be read as a second carton, and lowering the
+   * device mid-step would clear the "already counted this one" memory.
+   *
+   * The dialog does not know what is being asked. It owns only the rule that
+   * nothing is scanned while something is.
+   */
+  interruption?: React.ReactNode
 }
 
 /** Poll cadence for `detect()`. 100ms keeps mobile CPUs (and battery) sane. */
 const SCAN_INTERVAL_MS = 100
+
+/** How long the success ring stays on the video after an accepted scan. */
+const SCAN_FLASH_MS = 250
+
+/** The scan history is a reassurance, not a ledger — the summary page is that. */
+const SCAN_LOG_VISIBLE = 5
 
 /** Self-hosted ZXing binary — see `public/zxing/zxing_reader.wasm`. */
 const ZXING_WASM_URL = '/zxing/zxing_reader.wasm'
@@ -114,6 +185,13 @@ export function BarcodeScannerDialog({
   busy = false,
   statusMessage = null,
   errorMessage = null,
+  title,
+  description,
+  manualLabel,
+  manualPlaceholder,
+  continuous = false,
+  log,
+  interruption = null,
 }: BarcodeScannerDialogProps): React.JSX.Element | null {
   const t = useT()
 
@@ -125,6 +203,16 @@ export function BarcodeScannerDialog({
   const detectingRef = React.useRef(false)
   const firedRef = React.useRef(false)
   const onDetectedRef = React.useRef(onDetected)
+  const scanStreamRef = React.useRef<ScanStreamState>(createScanStreamState())
+  const flashTimeoutRef = React.useRef<number | null>(null)
+  // `busy` flips on every scan while the parent persists it, and `continuous`
+  // is a caller decision that must never tear the camera down. Both are read
+  // from inside the poll loop through refs so neither re-runs the start effect.
+  const busyRef = React.useRef(busy)
+  const continuousRef = React.useRef(continuous)
+  // Same reason as `busy`: the step goes up and comes down on every counted item, and
+  // re-running the start effect would restart the camera once per carton.
+  const interruptedRef = React.useRef(interruption != null)
 
   const [attempt, setAttempt] = React.useState(0)
   const [starting, setStarting] = React.useState(false)
@@ -133,10 +221,48 @@ export function BarcodeScannerDialog({
   const [torchOn, setTorchOn] = React.useState(false)
   const [captured, setCaptured] = React.useState(false)
   const [manualValue, setManualValue] = React.useState('')
+  const [flashing, setFlashing] = React.useState(false)
 
   React.useEffect(() => {
     onDetectedRef.current = onDetected
   }, [onDetected])
+
+  React.useEffect(() => {
+    busyRef.current = busy
+  }, [busy])
+
+  React.useEffect(() => {
+    continuousRef.current = continuous
+  }, [continuous])
+
+  React.useEffect(() => {
+    interruptedRef.current = interruption != null
+  }, [interruption])
+
+  const clearFlash = React.useCallback(() => {
+    if (flashTimeoutRef.current !== null) {
+      window.clearTimeout(flashTimeoutRef.current)
+      flashTimeoutRef.current = null
+    }
+    setFlashing(false)
+  }, [])
+
+  // The operator is looking at the pallet, so the ring is the glance-value
+  // confirmation; the blip and the buzz carry the rest.
+  const flashScanAccepted = React.useCallback(() => {
+    if (flashTimeoutRef.current !== null) window.clearTimeout(flashTimeoutRef.current)
+    setFlashing(true)
+    flashTimeoutRef.current = window.setTimeout(() => {
+      flashTimeoutRef.current = null
+      setFlashing(false)
+    }, SCAN_FLASH_MS)
+  }, [])
+
+  // A scan can land milliseconds before the dialog unmounts, so the pending
+  // timeout outlives the component unless it is cancelled here.
+  React.useEffect(() => () => {
+    if (flashTimeoutRef.current !== null) window.clearTimeout(flashTimeoutRef.current)
+  }, [])
 
   const stopCamera = React.useCallback(() => {
     if (intervalRef.current !== null) {
@@ -170,6 +296,7 @@ export function BarcodeScannerDialog({
     let cancelled = false
     firedRef.current = false
     detectingRef.current = false
+    scanStreamRef.current = createScanStreamState()
     setCaptured(false)
     setCameraError(null)
     setStarting(true)
@@ -179,13 +306,38 @@ export function BarcodeScannerDialog({
       const detector = detectorRef.current
       if (!video || !detector) return
       if (detectingRef.current || firedRef.current) return
+      // Before the frame is even read: while a step is open the stream is frozen, so an
+      // empty frame cannot clear the memory of the carton that opened it. Lowering the
+      // device to tap `+10` must not turn that same carton into a second one.
+      if (interruptedRef.current) return
       // HAVE_CURRENT_DATA — nothing decodable before the first frame lands.
       if (video.readyState < 2) return
       detectingRef.current = true
       try {
         const results = await detector.detect(video)
         const rawValue = results.length > 0 ? results[0].rawValue : ''
-        if (rawValue && !firedRef.current && !cancelled) {
+        if (cancelled) return
+        if (continuousRef.current) {
+          if (!rawValue) {
+            // Nothing in frame: the previous code physically left, which is
+            // what lets an identical carton count again.
+            scanStreamRef.current = observeEmptyFrame(scanStreamRef.current)
+            return
+          }
+          // While the parent is still persisting the previous scan, acceptance
+          // is suspended entirely — a slow POST would otherwise queue ten
+          // counts off a single carton held in front of the lens. The stream
+          // state is left untouched, so nothing is silently consumed either.
+          if (busyRef.current) return
+          const outcome = observeScan(scanStreamRef.current, rawValue, Date.now())
+          scanStreamRef.current = outcome.state
+          if (!outcome.accepted) return
+          playScanFeedback()
+          flashScanAccepted()
+          onDetectedRef.current(rawValue)
+          return
+        }
+        if (rawValue && !firedRef.current) {
           firedRef.current = true
           stopCamera()
           setCaptured(true)
@@ -259,8 +411,9 @@ export function BarcodeScannerDialog({
     return () => {
       cancelled = true
       stopCamera()
+      clearFlash()
     }
-  }, [open, attempt, stopCamera])
+  }, [open, attempt, stopCamera, clearFlash, flashScanAccepted])
 
   const handleOpenChange = React.useCallback(
     (next: boolean) => {
@@ -294,10 +447,13 @@ export function BarcodeScannerDialog({
 
   const submitManual = React.useCallback(() => {
     if (busy) return
+    // The step owns the dialog while it is up, including its Cmd/Ctrl+Enter. Typing a code
+    // past an unanswered question is the one thing the interruption exists to prevent.
+    if (interruption != null) return
     const trimmed = manualValue.trim()
     if (!trimmed) return
     onDetectedRef.current(trimmed)
-  }, [busy, manualValue])
+  }, [busy, interruption, manualValue])
 
   const handleDialogKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -365,10 +521,23 @@ export function BarcodeScannerDialog({
     }
   }, [cameraError, t])
 
+  const labels = React.useMemo(
+    () => resolveScannerLabels({ title, description, manualLabel, manualPlaceholder }, t),
+    [title, description, manualLabel, manualPlaceholder, t],
+  )
+
+  // The caller prepends as it goes, so the freshest scan is already first —
+  // which is where a glance lands. Past five lines it is noise on a phone.
+  const visibleLog = React.useMemo(
+    () => (log ? log.slice(0, SCAN_LOG_VISIBLE) : []),
+    [log],
+  )
+
   if (!open) return null
 
   const manualInputId = 'barcode-scanner-manual-entry'
   const manualDisabled = busy || manualValue.trim().length === 0
+  const interrupted = interruption != null
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -377,16 +546,11 @@ export function BarcodeScannerDialog({
         closeAriaLabel={t('barcodeScanner.scanner.close', 'Close')}
       >
         <DialogHeader leading={<ScanLine aria-hidden="true" />} leadingTone="accent">
-          <DialogTitle>{t('barcodeScanner.scanner.title', 'Scan a barcode')}</DialogTitle>
-          <DialogDescription>
-            {t(
-              'barcodeScanner.scanner.description',
-              'Point the rear camera at a barcode. You can also type the code by hand.',
-            )}
-          </DialogDescription>
+          <DialogTitle>{labels.title}</DialogTitle>
+          <DialogDescription>{labels.description}</DialogDescription>
         </DialogHeader>
 
-        {cameraErrorCopy ? (
+        {cameraErrorCopy && !interrupted ? (
           <Alert
             status="error"
             size="default"
@@ -402,10 +566,13 @@ export function BarcodeScannerDialog({
           </Alert>
         ) : null}
 
+        {/* Hidden while a step is up, never unmounted: the <video> element holds the live
+            MediaStream, so dropping it would stop the camera and make every counted item
+            pay a fresh getUserMedia start. */}
         <div
           className={cn(
             'relative w-full overflow-hidden rounded-md border border-input bg-muted aspect-video',
-            cameraErrorCopy ? 'hidden' : '',
+            cameraErrorCopy || interrupted ? 'hidden' : '',
           )}
         >
           <video
@@ -435,9 +602,26 @@ export function BarcodeScannerDialog({
               </span>
             </div>
           ) : null}
+          {flashing ? (
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 bg-status-success-bg/30 ring-4 ring-inset ring-status-success-solid"
+            />
+          ) : null}
         </div>
 
-        {!cameraErrorCopy && (torchSupported || captured) ? (
+        {interrupted ? interruption : null}
+
+        {continuous && !cameraErrorCopy && !interrupted ? (
+          <p className="text-sm text-muted-foreground">
+            {t(
+              'barcodeScanner.scanner.continuousHint',
+              'Keep scanning — the camera stays on. Every item counts, even identical ones.',
+            )}
+          </p>
+        ) : null}
+
+        {!cameraErrorCopy && !interrupted && (torchSupported || captured) ? (
           <div className="flex flex-wrap items-center gap-2">
             {torchSupported ? (
               <Button type="button" variant="outline" onClick={handleToggleTorch} aria-pressed={torchOn}>
@@ -456,7 +640,46 @@ export function BarcodeScannerDialog({
           </div>
         ) : null}
 
-        {statusMessage ? (
+        {visibleLog.length > 0 && !interrupted ? (
+          // A live region, because the confirmation has to reach someone whose
+          // eyes are on the pallet and someone using a screen reader alike.
+          <section
+            role="status"
+            aria-live="polite"
+            // `role="status"` is atomic by default, which would re-read all five
+            // lines on every carton. Only the new one is news.
+            aria-atomic="false"
+            aria-label={t('barcodeScanner.scanner.logHeading', 'Recent scans')}
+            className="flex flex-col gap-1"
+          >
+            <h3 className="text-xs font-medium text-muted-foreground">
+              {t('barcodeScanner.scanner.logHeading', 'Recent scans')}
+            </h3>
+            <ul className="flex flex-col gap-1">
+              {visibleLog.map((entry) => (
+                <li
+                  key={entry.id}
+                  className={cn(
+                    'flex items-center gap-2 rounded-md border px-2 py-1 text-sm',
+                    entry.tone === 'success'
+                      ? 'border-status-success-border bg-status-success-bg text-status-success-text'
+                      : 'border-status-error-border bg-status-error-bg text-status-error-text',
+                  )}
+                >
+                  {/* The icon carries the outcome too — colour alone never does. */}
+                  {entry.tone === 'success' ? (
+                    <Check aria-hidden="true" className="size-4 shrink-0 text-status-success-icon" />
+                  ) : (
+                    <X aria-hidden="true" className="size-4 shrink-0 text-status-error-icon" />
+                  )}
+                  <span>{entry.label}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+
+        {statusMessage && !interrupted ? (
           <Alert status="information" aria-live="polite">
             <AlertDescription className="flex items-center gap-2">
               {busy ? <Spinner size="sm" /> : null}
@@ -465,16 +688,18 @@ export function BarcodeScannerDialog({
           </Alert>
         ) : null}
 
-        {errorMessage ? (
+        {/* An interruption is a whole surface, not a panel among others: while one is up it
+            owns the refusal too, so the caller is not made to render the same text twice. */}
+        {errorMessage && !interrupted ? (
           <Alert status="error">
             <AlertDescription>{errorMessage}</AlertDescription>
           </Alert>
         ) : null}
 
-        <div className="flex flex-col gap-2">
-          <Label htmlFor={manualInputId}>
-            {t('barcodeScanner.scanner.manualLabel', 'Or enter the barcode manually')}
-          </Label>
+        {/* Typing a code is another way to scan, so it goes away with the camera while a
+            step is unanswered — otherwise the one rule this step enforces has a back door. */}
+        <div className={cn('flex flex-col gap-2', interrupted ? 'hidden' : '')}>
+          <Label htmlFor={manualInputId}>{labels.manualLabel}</Label>
           <div className="flex items-center gap-2">
             <Input
               id={manualInputId}
@@ -484,7 +709,7 @@ export function BarcodeScannerDialog({
               inputMode="text"
               autoComplete="off"
               disabled={busy}
-              placeholder={t('barcodeScanner.scanner.manualPlaceholder', 'e.g. 5901234123457')}
+              placeholder={labels.manualPlaceholder}
             />
             <Button type="button" onClick={submitManual} disabled={manualDisabled}>
               {busy ? <Spinner size="sm" /> : null}
@@ -492,6 +717,14 @@ export function BarcodeScannerDialog({
             </Button>
           </div>
         </div>
+
+        {continuous && !interrupted ? (
+          // Nothing else ends a counting session: the dialog no longer closes
+          // itself on a decode. Sized for a gloved thumb on a phone.
+          <Button type="button" onClick={onClose} className="h-16 w-full text-base">
+            {t('barcodeScanner.scanner.done', 'Done')}
+          </Button>
+        ) : null}
       </DialogContent>
     </Dialog>
   )

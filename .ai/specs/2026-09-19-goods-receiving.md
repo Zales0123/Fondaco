@@ -61,8 +61,17 @@ handheld device, a barcode scanner, gloves, and no way to write down what is in 
   capacity.
 - Pallets that outlive their Goods Receipt, are re-used across documents, or are moved.
 - Correcting a `confirmed` Goods Receipt. ADR-0006's answer — a correcting document — stays unbuilt.
-- Printing Pallet labels.
+- Printing Pallet labels — no longer a Non-goal. It was deferred out of this slice and delivered
+  afterwards in PR #37: creating a Pallet prints its label and the counting screen reprints it. The
+  deferral was right for the plan this document made; the behavior itself is documented with the
+  `label_printing` module, not here.
 - Units of measure on counted quantities, and any conversion between a Line's unit and a counted one.
+- GS1-128, and any other application-identifier encoding. A scanned code is matched whole against
+  the variant's barcode; a quantity, batch number or expiry date carried inside the code is not read.
+- Collective and carton codes. One accepted scan means one item of one variant — a code standing for
+  "24 of these" has no meaning on the counting screen.
+- Offline counting. Every scan is resolved and recorded server-side, so a Panel that has lost the
+  network cannot count.
 - New events, new notifications, scheduled work, search indexing of Pallets.
 
 ## Proposed Solution
@@ -93,6 +102,13 @@ the difference per variant, surplus included.
 | Confirm gates on all Pallets closed, zero Pallets allowed | "Nothing arrived" is a real outcome | Require ≥1 Pallet | Forces a fake empty Pallet to express an empty delivery |
 | No new events | Nothing subscribes; `pz.goods_receipt.confirmed` stays the module's one external fact | An event per transition | Four dead payloads that then need backward compatibility |
 | Panel UI in `warehouseman`, all data and API in `pz` | ADR-0001 (Panel owns its route namespace) + ADR-0004 (Goods Receipts own their module) | A third `receiving` module | A Pallet that cannot outlive its Goods Receipt is part of that document |
+| The counting screen scans with the device camera through the shared `BarcodeScannerDialog`, beside the existing text field | The same component already scans Pallet labels one screen earlier; a Warehouseman holding a phone and no handheld wedge could otherwise not count at all | A counting-specific scanner component | Two camera lifecycles, two permission stories and two sets of failure copy for one gesture |
+| An accepted scan counts one; the quantity field multiplies it when filled | A scan is the gesture that means "one more of these"; blank is the case the floor is in nearly all the time | Keep the quantity field mandatory, as this spec originally required | Every scan becomes scan-then-type-a-number, which is slower than the paper it replaces |
+| In continuous mode the same value is accepted again only after several consecutive ticks decode nothing and a cooldown elapses; a different value is accepted at once (ADR-0011) | It mirrors the physical motion — the carton leaves the frame before the next one enters it | Ignore an identical code for a fixed window after each decode | Twenty identical cartons in a row is the ordinary case, and a same-code window silently drops the ones inside it; the resulting shortage is indistinguishable from a short delivery |
+| The frame counts as clear only after a *run* of empty ticks, reset by any decode | One tick decoding nothing is blur or glare far more often than departure, and trusting it counts a carton that never moved | Treat a single empty tick as the code leaving | A silent over-count receives stock the warehouse never took in — the worse of the two silent errors |
+| The quantity field is cleared after every recorded count | A multiplier left over from the previous product would silently multiply the next scan | Keep the typed value for the next scan | Nobody sees a stale multiplier being applied, and the pallet ends up with a number no one entered |
+| Scan acceptance is suspended while a count is posting | The camera decodes far faster than the round trip completes | Buffer the decodes and replay them when the request returns | The buffer is invisible, so the total ends up including items nobody presented |
+| An unknown code stops the camera and hands over to the inline product picker, keeping the code on screen | The scanned digits are the only record of what is in the person's hand | Keep scanning and report the unresolved codes afterwards | The code is gone the moment the next one decodes, and nobody can reconstruct which carton it belonged to |
 
 ## Domain Vocabulary and Business Rules
 
@@ -186,9 +202,13 @@ office  -> POST /api/pz/goods-receipts/confirm   -> pz.goodsReceipts.confirm   -
    has not released anything yet.
 3. Opens one, sees its Pallets, taps **Utwórz paletę**; the new Pallet is created with a generated
    code and the app navigates straight into it.
-4. Scans a product barcode, types a quantity, submits; the Pallet Line appears with a running total.
-   Re-scanning the same product adds to it.
-5. An unknown barcode opens a product search; picking a variant records the count normally.
+4. Scans a product barcode — with the device camera, or with a handheld wedge scanner typing into
+   the barcode field — and submits. The Pallet Line appears with a running total, and re-scanning
+   the same product adds to it. The quantity field is left alone to count one item and filled to
+   count several at once, so counting carton by carton never involves the keyboard; with the camera
+   open in continuous mode the whole pallet is counted without touching the screen.
+5. An unknown barcode stops the camera and opens a product search with the scanned code still on
+   screen; picking a variant records the count normally.
 6. Taps **Zakończ skanowanie**; the Pallet becomes `closed` and the app returns to the Pallet list.
 7. Starts the next Pallet, or opens **Podsumowanie przyjęcia** to see what is still missing.
 8. Failure paths: a `closed` Pallet refuses counts until reopened; a Pallet code from another
@@ -216,7 +236,7 @@ Warehouse option source the Goods Receipt form already uses. Raw IDs never appea
 |---|---|---|---|---|---|---|
 | `/warehouseman/receiving` | List `receiving` receipts for the Assigned Warehouse; widen Warehouse; open one | `GET /api/pz/goods-receipts?status=receiving` | `warehouseman` `PanelHome` | `PanelShell`, primitives | loading, empty, error, permission denied | REQ-002 |
 | `/warehouseman/receiving/[receiptId]` | Pallet list; **Utwórz paletę**; scan a Pallet code; open the Summary; delete an empty Pallet | `GET/POST/DELETE /api/pz/pallets`, `GET /api/pz/pallets/by-code` | `PanelShell` screens | `PanelShell`, primitives | loading, empty, error, not-found, wrong-document, success | REQ-003, REQ-005 |
-| `/warehouseman/receiving/[receiptId]/pallets/[palletId]` | Count: barcode + quantity; edit a quantity; remove a Pallet Line; **Zakończ skanowanie** / reopen | `GET/POST/PUT/DELETE /api/pz/pallet-lines`, `GET /api/pz/receiving/variant-by-barcode`, `POST /api/pz/pallets/close`, `/reopen` | `PanelShell` screens; `GoodsReceiptLinesEditor` for line-editing behavior | `PanelShell`, primitives, catalog variant picker | loading, empty, error, unknown-barcode fallback, conflict (409), closed-pallet, success | REQ-004, REQ-005, REQ-006, REQ-009 |
+| `/warehouseman/receiving/[receiptId]/pallets/[palletId]` | Count: scan with the camera or type a barcode, with an optional quantity multiplier; edit a quantity; remove a Pallet Line; **Zakończ skanowanie** / reopen | `GET/POST/PUT/DELETE /api/pz/pallet-lines`, `GET /api/pz/receiving/variant-by-barcode`, `POST /api/pz/pallets/close`, `/reopen` | `PanelShell` screens; `GoodsReceiptLinesEditor` for line-editing behavior; `ReceivingPallets` for the camera dialog | `PanelShell`, primitives, `BarcodeScannerDialog` (`barcode_scanner`), catalog variant picker | loading, empty, error, unknown-barcode fallback, conflict (409), closed-pallet, camera unavailable (insecure context, permission denied, no camera, unsupported browser), success | REQ-004, REQ-005, REQ-006, REQ-009 |
 | `/warehouseman/receiving/[receiptId]/summary` | Expected vs counted per product, worst difference first, surplus flagged | `GET /api/pz/goods-receipts/receiving-summary` | `pz` `GoodsReceiptDetail` | `PanelShell`, primitives | loading, empty, error | REQ-007 |
 | `/backend/wms/goods-receipts/[id]` | Adds: **Przekaż do przyjęcia**, **Cofnij do wersji roboczej**, Pallet list, Receiving Summary section; Confirm gains its refusal | `POST …/release`, `…/withdraw`, `GET …/receiving-summary`, `GET /api/pz/pallets` | itself (existing detail page) | `Page`, `PageBody`, `DataTable` | loading, empty, error, conflict, success, permission denied | REQ-001, REQ-007, REQ-008 |
 | `/backend/wms/goods-receipts` | Status filter and badge gain `receiving` | `GET /api/pz/goods-receipts` | itself | `DataTable` | unchanged | REQ-001 |
@@ -232,7 +252,7 @@ Warehouse option source the Goods Receipt form already uses. Raw IDs never appea
 |---|---|---|---|
 | Panel receipt list | "Brak dokumentów do przyjęcia" + how a document gets here | single column, full-width rows | list is a sequence of links; visible focus ring |
 | Panel pallet list | "Brak palet" + **Utwórz paletę** as the primary action | single column | primary action reachable first |
-| Panel counting screen | "Brak zeskanowanych towarów" + hint to scan | single column, quantity field beside the code field at ≥480px | barcode field autofocused and refocused after every submit — a scanner ends with Enter, so the form submits on Enter and never loses focus |
+| Panel counting screen | "Brak zeskanowanych towarów" + hint to scan | single column, quantity field beside the code field at ≥480px; the camera dialog fills the width and its preview keeps a 16:9 box | barcode field autofocused and refocused after every submit — a wedge scanner ends with Enter, so the form submits on Enter and never loses focus; the camera dialog is focus-trapped, hands focus back to the barcode field when it closes, and its own manual-entry field submits on Enter for anyone the camera will not serve |
 | Summary | "Nic jeszcze nie policzono" | table collapses to stacked rows on narrow screens | headers announced; difference stated in text, never by color alone |
 
 ### `/warehouseman/receiving/[receiptId]/pallets/[palletId]` — Counting screen
@@ -242,7 +262,8 @@ Warehouse option source the Goods Receipt form already uses. Raw IDs never appea
 │ PZ/12/2026 · Paleta PAL-000042              [Zakończ skan.] │
 │ Dostawca: Hurt-Pol · 3 pozycje                              │
 ├────────────────────────────────────────────────────────────┤
-│ [ kod kreskowy ............................ ] [ ilość ] [+] │
+│ [ kod kreskowy ........................ ] [▣] [ilość] [+]   │
+│                                       Puste = 1 sztuka      │
 │   nieznany kod → [ wyszukaj produkt ▾ ]                     │
 ├────────────────────────────────────────────────────────────┤
 │ Kabel USB-C 2m        SKU 4411     12  [edytuj] [usuń]      │
@@ -252,13 +273,114 @@ Warehouse option source the Goods Receipt form already uses. Raw IDs never appea
 └────────────────────────────────────────────────────────────┘
 ```
 
-- **Behavior:** barcode submit resolves a variant and adds the quantity to the (Pallet, variant)
-  total; unknown barcode reveals the catalog picker inline with the scanned code preserved;
-  quantity must be `> 0`; editing sends the Pallet Line's `updatedAt` and surfaces a 409 by
-  reloading the row and asking the Warehouseman to re-enter; removing a Pallet Line asks for
-  confirmation; closing asks for confirmation and states that it can be reopened.
-- **Responsive and accessibility:** touch targets ≥44px, focus stays in the barcode field, each
-  added or changed row announced through a live region, confirmation dialogs focus-trapped.
+`▣` is **Zeskanuj towar aparatem**, an icon button beside the barcode field that opens the shared
+scanner dialog in continuous mode:
+
+```text
+  ┌────────────────────────────────────────────┐
+  │ Skanuj towary                              │
+  │ ┌────────────────────────────────────────┐ │
+  │ │          live camera preview           │ │ ← ring flashes per accepted scan
+  │ └────────────────────────────────────────┘ │
+  │ Skanuj dalej — aparat pozostaje włączony…  │
+  │ Ostatnie skany                             │
+  │  ✓ Kabel USB-C 2m +1 → 12                  │
+  │  ✓ Kabel USB-C 2m +1 → 11                  │
+  │  ✗ Kod 5901234123457 jest nieznany.        │
+  │ Kod kreskowy towaru [        ] [Użyj kodu] │
+  │ [                Gotowe                  ] │
+  └────────────────────────────────────────────┘
+```
+
+An accepted scan replaces all of that with the quantity step until it is answered — the camera
+keeps running underneath, but nothing is scanned past it:
+
+```text
+  ┌────────────────────────────────────────────┐
+  │ Skanuj towary                              │
+  │ Kabel USB-C 2m                             │
+  │ 5901234123457                              │
+  │                                            │
+  │  ┌────┐ ┌───┐ ┌──────┐ ┌───┐ ┌────┐        │
+  │  │ −10│ │ − │ │  12  │ │ + │ │ +10│        │
+  │  └────┘ └───┘ └──────┘ └───┘ └────┘        │
+  │                 ↑ można też wpisać          │
+  │ [              Dodaj 12                  ] │
+  │ [               Anuluj                   ] │
+  └────────────────────────────────────────────┘
+```
+
+- **Behavior:** a barcode reaches the count through three routes that end in the same call — a
+  handheld wedge scanner typing into the field and ending with Enter, a code typed by hand, and the
+  camera. The code resolves to a variant and the quantity is added to the (Pallet, variant) total.
+  The quantity field is a multiplier, not a requirement: left blank a scan counts one, filled with
+  `12` it counts twelve. A quantity that was actually typed is still validated and must be `> 0`.
+  An unknown barcode reveals the catalog picker inline with the scanned code preserved; editing
+  sends the Pallet Line's `updatedAt` and surfaces a 409 by reloading the row and asking the
+  Warehouseman to re-enter; removing a Pallet Line asks for confirmation; closing asks for
+  confirmation and states that it can be reopened.
+- **Camera scanning:** the icon button opens the shared `BarcodeScannerDialog` from
+  `barcode_scanner` — the same component the Pallet list uses for Pallet labels — in continuous
+  mode, so the camera stays on and a pallet's worth of cartons is counted without touching the
+  screen. The dialog no longer closes itself on a decode; a **Gotowe** button ends the session.
+  The acceptance rule is ADR-0011: a decoded value that differs from the last accepted one counts
+  immediately, while the *same* value counts again only once several consecutive poll ticks have
+  decoded nothing — the code actually left the frame, rather than one blurred look at a label still
+  in front of the lens — and a cooldown has elapsed since the last acceptance. A plain "ignore an identical code for
+  N ms" debounce is wrong here: twenty identical cartons in a row is the ordinary case and every one
+  of them must count. Acceptance is suspended entirely while a count is posting, so a slow round
+  trip cannot queue scans nobody presented, and the stream state is left untouched so nothing is
+  silently consumed either. A code that resolves to no variant closes the camera and hands over to
+  the inline picker rather than scanning past it: the picker is on the screen behind the dialog and
+  has to be read and tapped.
+- **A camera scan asks how many (ADR-0012):** the code names *which* product, never how many, so a
+  camera scan resolves the variant and then stops. A confirmation step takes over the dialog and
+  nothing is recorded until it is answered. One scan can therefore mean a carton of twenty-four
+  rather than one box presented twenty-four times, which is the ordinary shape of a delivery — the
+  scan-means-one reading only ever beat typing while every item was physically presented to the
+  lens. The step starts at 1, so a single item stays two taps.
+- **Sized for a glove:** `−10 − [ 12 ] + +10`, with the number also typeable for an exact odd
+  count. The steppers are the primary control because a gloved hand finds a large button reliably
+  and a text caret badly; `±10` exists so a pallet of forty-eight is five taps rather than
+  forty-seven. `adjustScanQuantity` clamps at one — coming back down from an overshoot is ordinary
+  input, and landing on 0 would put a count on screen the server is bound to refuse. The confirm
+  button states the amount it is about to add (**Dodaj 12**) rather than saying "Add", because a
+  mis-tapped `+10` is a larger error than a duplicated scan ever was.
+- **Nothing is scanned past an unanswered step:** no decode, no manual-entry field, and no
+  Cmd/Ctrl+Enter. `BarcodeScannerDialog` takes the step as an opaque `interruption` node and owns
+  exactly that one rule; the gloved-hands UI and every quantity rule stay in `warehouseman`. The
+  step renders *inside* the scanner dialog rather than as a second modal, because a separate dialog
+  would unmount the `<video>` element holding the `MediaStream` and pay a fresh camera start per
+  counted item, on top of nesting two focus traps.
+- **ADR-0011 is frozen, not repealed, while the step is open:** neither a decode nor an empty frame
+  is observed, exactly as while a count is posting. After confirming, the carton is usually still in
+  front of the lens — the operator was looking at the screen — so without the repeat rule the step
+  would immediately re-raise for the item just counted. Freezing rather than ignoring matters
+  because a device lowered to tap `+10` shows an empty frame for far longer than the three ticks
+  that mean "the carton left", and advancing through that would invent a second carton.
+- **Cancel is free, refusal is not punished:** nothing is written until the step is answered, so a
+  misread barcode costs a tap rather than a correction on the pallet, and a count the server refuses
+  leaves the step open with the chosen amount intact.
+- **The typed path is unchanged:** a wedge-scanned or hand-typed code carries its quantity in the
+  field beside it on the same screen, already visible and already reachable, so a step there would
+  be ceremony. Blank still means one unit. Both paths resolve and refuse a code on identical terms
+  and differ only in where the amount comes from.
+- **Scan feedback:** the operator is looking at the pallet, not at the screen, so an accepted scan
+  flashes a ring over the preview, plays a short blip and vibrates, and appends a line to the **Ostatnie
+  skany** list showing the product, what the scan added and the resulting total — the running total,
+  because that is the number checked against the goods in front of them. A refusal appends the
+  server's own localized text with an error icon. Sound and vibration are best-effort and never
+  interrupt counting when the device or the browser refuses them; the list carries its outcome in an
+  icon as well as its color, and is a live region so the same confirmation reaches a screen reader.
+- **Camera availability:** `getUserMedia` requires a secure context, so the camera works on
+  `localhost` and over HTTPS and is refused on a plain-HTTP LAN address. The dialog names that case
+  explicitly, as it does permission denial, a missing camera and a browser that exposes no
+  `getUserMedia`, and its manual-entry field stays available in every one of them. The camera path
+  was QA'd against a laptop webcam on `localhost`; a phone reaching the app over
+  `http://<LAN-IP>:3000` gets manual entry and the explanation, never a preview.
+- **Responsive and accessibility:** touch targets ≥44px, focus stays in the barcode field and
+  returns to it when the camera dialog closes, each added or changed row announced through a live
+  region, camera and confirmation dialogs focus-trapped.
 - **Localization:** `warehouseman.receiving.*` for Panel copy, `pz.pallets.*` / `pz.palletLines.*`
   for API error messages; Polish and English both supplied.
 - **Design-system and theming:** semantic tokens only, as in `PanelShell`; difference and surplus
@@ -419,10 +541,19 @@ context, `adoptSession`) and `src/modules/warehouseman/__integration__/TC-WHM-00
 | TEST-010 | UI (browser) | warehouseman with assigned warehouse, one `receiving` receipt | Panel: open receiving list, create pallet, count an unknown barcode via the picker, close, read the summary | each screen's loading/empty/error/conflict states render; only the assigned warehouse's receipts listed; keyboard-only path from barcode field to submit works | REQ-002, REQ-004, REQ-006, REQ-007 |
 | TEST-011 | unit | — | barcode normalization + variant resolution helper | trims, rejects empty, resolves exact match, reports unknown | REQ-004 |
 | TEST-012 | unit | — | summary computation over expected lines + pallet lines | sums per variant across pallets, negative/positive/zero differences, surplus rows, ordering worst-first | REQ-007 |
+| TEST-013 | unit | — | quantity resolution for a submitted scan | blank resolves to one, a typed value is parsed and scaled, a non-positive or malformed value is refused | REQ-004 |
+| TEST-014 | unit | — | continuous-scan acceptance over a sequence of poll results | a new value is accepted at once; the same value is refused until a sustained run of empty ticks plus the cooldown; a lone empty tick never re-arms it; nothing is accepted while a count is in flight | REQ-004 |
 
 **Seams.** Two, both existing: the module's HTTP API (all API and security tests) and the Panel in a
-browser (TEST-010). The only new seams are two pure functions — barcode/variant resolution and the
-summary computation — extracted so TEST-011/012 do not need a database.
+browser (TEST-010). The new seams are all pure functions — barcode/variant resolution, the summary
+computation, quantity resolution and continuous-scan acceptance — extracted so TEST-011 … TEST-014
+need neither a database nor a camera.
+
+**Camera coverage caveat.** No automated test drives a real camera; `getUserMedia` and the decoder
+are outside every seam above. The acceptance rule is covered as a pure function (TEST-014) and the
+camera path itself was QA'd by hand against a laptop webcam on `localhost`, which is the only origin
+a browser will grant a camera to outside HTTPS. Scanning from a phone over a plain-HTTP LAN address
+is not testable and is not supported.
 
 ## Implementation Phases
 
@@ -505,7 +636,7 @@ summary computation — extracted so TEST-011/012 do not need a database.
 | REQ-001 | J-001, `/backend/wms/goods-receipts/[id]` | `pz_goods_receipts.status`, `release`, `withdraw` | Phase 1 | TEST-001, TEST-002 | AC-001 |
 | REQ-002 | J-002, `/warehouseman/receiving` | `GET /api/pz/goods-receipts?status=receiving` | Phase 2 | TEST-009, TEST-010 | AC-002 |
 | REQ-003 | J-002, `/warehouseman/receiving/[receiptId]` | `pz_pallets`, `/api/pz/pallets`, `/by-code` | Phase 2 | TEST-003, TEST-004 | AC-003 |
-| REQ-004 | J-002, counting screen | `pz_pallet_lines`, `/api/pz/pallet-lines`, `variant-by-barcode` | Phase 3 | TEST-005, TEST-006, TEST-011 | AC-004 |
+| REQ-004 | J-002, counting screen | `pz_pallet_lines`, `/api/pz/pallet-lines`, `variant-by-barcode` | Phase 3 | TEST-005, TEST-006, TEST-011, TEST-013, TEST-014 | AC-004, AC-010, AC-011, AC-012, AC-013 |
 | REQ-005 | J-002, counting screen | `PUT`/`DELETE /api/pz/pallet-lines`, `DELETE /api/pz/pallets` | Phase 3 | TEST-005 | AC-005 |
 | REQ-006 | J-002 step 6, J-003 | `/api/pz/pallets/close`, `/reopen` | Phase 4 | TEST-008, TEST-010 | AC-006 |
 | REQ-007 | J-003, both summary surfaces | `receiving-summary` | Phase 5 | TEST-010, TEST-012 | AC-007 |
@@ -522,6 +653,29 @@ data backfill: existing receipts stay `draft` or `confirmed`, and no confirmed d
 a Stub Action, so the feature is invisible until its phase lands. Rollback is per phase — dropping
 the two tables and the `receiving` status is safe while no document has been released; once a
 document has been released, rolling back requires withdrawing it to `draft` first.
+
+**Backward compatibility of the camera work.** Camera counting changed no contract.
+`BarcodeScannerDialog` gained props only; every one of them is optional and every default reproduces
+the behavior the component had before, so `/backend/catalog/scan` and the Panel's Pallet list keep
+one-shot scanning without being touched. No API route, request or response shape, entity, column,
+schema or command signature changed, so there is no migration and nothing to roll back on the server
+side — reverting the Panel change leaves a working text-field count. `BarcodeScannerDialog` is now
+shared by three call sites, which makes its props a contract surface: read
+`.ai/guides/upstream/BACKWARD_COMPATIBILITY.md` before changing them again.
+
+**Backward compatibility of the quantity step.** Read under that same rule, and additive on every
+axis it touches. `BarcodeScannerDialog` gained one optional prop, `interruption`; nothing is
+removed, renamed or narrowed. Omitted, it is `null` and the dialog renders and behaves exactly as
+before, so `/backend/catalog/scan` and the pallet-label scan on the pallets screen are unaffected.
+The prop carries a behavioral contract worth stating plainly, because it is not inferable from the
+type: **while it is non-null the dialog accepts no scan and freezes the repeat-rule state.** A
+future caller that passes a node without wanting that gate would be misusing it.
+
+`scanStream.ts` and its tests are untouched — ADR-0012 changes when the rule is consulted, never the
+rule. `adjustScanQuantity` is a new export beside `resolveCountQuantity`, which is unchanged and
+still what the typed path uses. The server is untouched: no route, payload, entity, column or
+command signature changed, so there is no migration and nothing to roll back server-side. Reverting
+leaves camera scans counting one unit each, which is the behavior this phase started from.
 
 ## Risks and Tradeoffs
 
@@ -553,6 +707,17 @@ document has been released, rolling back requires withdrawing it to `draft` firs
 - [ ] **AC-008** — Confirm is refused while any Pallet is open, succeeds when all are closed
       (including with zero Pallets), and moves no stock.
 - [ ] **AC-009** — Two concurrent quantity writes: the second receives 409 and no count is lost.
+- [ ] **AC-010** — A scan submitted with the quantity field left blank adds exactly one; the same
+      scan with `12` in the field adds twelve; a quantity that was typed and is not a positive
+      number is still refused before the request is made.
+- [ ] **AC-011** — With the camera in continuous mode, the same barcode presented, removed from the
+      frame and presented again counts once per presentation; a code held steadily in front of the
+      lens counts once, and goes on counting once across a blurred or glared moment that briefly
+      stops it decoding; and nothing is accepted while a count is still posting.
+- [ ] **AC-012** — A decoded code that resolves to no variant stops the camera, keeps the code on
+      screen, and the count is still completed through the product picker.
+- [ ] **AC-013** — On a plain-HTTP origin, opening the scanner states why the camera cannot start
+      and the same count is still completed by typing or wedge-scanning the barcode.
 - [ ] Every listed backend surface matches its recorded Open Mercato reference and uses the canonical
       shell/components, shared API helpers, semantic tokens, and complete loading, empty, error,
       conflict, keyboard, accessibility, responsive, light-mode, and dark-mode states.
@@ -563,7 +728,7 @@ document has been released, rolling back requires withdrawing it to `draft` firs
 
 | Check | Status | Evidence / resolution |
 |---|---|---|
-| Applicable `AGENTS.md` files and routed guides/skills reviewed | pass | root `AGENTS.md`, `.ai/specs/README.md`, `SPEC-000-template.md`, `.ai/guides/modules/wms|catalog` entity facts, ADR-0001…0010 |
+| Applicable `AGENTS.md` files and routed guides/skills reviewed | pass | root `AGENTS.md`, `.ai/specs/README.md`, `SPEC-000-template.md`, `.ai/guides/modules/wms|catalog` entity facts, ADR-0001…0011 |
 | Data models, APIs, events, UI, and tests are internally consistent | pass | Requirement Traceability covers REQ-001…009 |
 | Every workflow completes end to end without a catch-all integration phase | pass | J-001…J-003; each phase ends in a usable slice |
 | Platform-native reuse and extension points were chosen before custom code | pass | Reuse and Ownership Map; `makeCrudRoute`, `CommandBus`, `PanelShell`, catalog picker |
@@ -588,3 +753,4 @@ Verdict: `Ready for implementation`.
 | 2026-09-19 | Initial draft from the `/grill-with-docs` design interview. |
 | 2026-09-19 | Q-001 resolved (`pz.receiving.count`); status set to `Ready for implementation`. |
 | 2026-09-19 | Receiving Summary presentation specified in full (ordering, toggle, expanders, wording, placement); every phase is agent-ready. |
+| 2026-09-19 | Counting screen amended to the delivered behavior: camera scanning through the shared `BarcodeScannerDialog` in continuous mode (ADR-0011), a scan counting one with the quantity field as a multiplier, and the camera's secure-context constraint. Pallet label printing recorded as delivered rather than a Non-goal; GS1-128, collective codes and offline work recorded as the remaining Non-goals. |

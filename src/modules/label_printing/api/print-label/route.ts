@@ -175,9 +175,11 @@ const printLabelDoc: OpenApiMethodDoc = {
   description:
     'Resolves the record into a barcode value and symbology, renders it onto the configured '
     + 'label geometry and sends it to the serial label printer. For `catalog.product` the value '
-    + "is the default variant's GTIN; a product whose variant carries no barcode is refused with "
-    + '422 rather than printed blank. The printer is an exclusive resource, so a concurrent '
-    + 'request is rejected with 409 rather than queued.',
+    + "is the default variant's GTIN; for `pz.pallet` it is the pallet's own code as Code128. "
+    + 'A record with nothing printable — a variant without a barcode, a pallet that does not '
+    + "exist in the caller's tenant and organization — is refused with 422 rather than printed "
+    + 'blank. The printer is an exclusive resource, so a concurrent request is rejected with 409 '
+    + 'rather than queued.',
   tags: [labelPrintingTag],
   responses: [
     {

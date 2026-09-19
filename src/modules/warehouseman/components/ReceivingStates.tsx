@@ -24,6 +24,18 @@ export function ScreenError({ children }: { children: React.ReactNode }) {
   )
 }
 
+/**
+ * The work went through and something alongside it did not — a label that never came out
+ * of the printer. Deliberately not `ScreenError`: nothing here has to be redone.
+ */
+export function ScreenWarning({ children }: { children: React.ReactNode }) {
+  return (
+    <Alert status="warning" className="border-2 border-status-warning-border bg-status-warning-bg">
+      <AlertDescription className="text-lg">{children}</AlertDescription>
+    </Alert>
+  )
+}
+
 export function ScreenEmpty({ title, description }: { title: string; description: string }) {
   return (
     <div className="flex flex-col items-center gap-2 rounded-lg border-2 border-dashed border-muted-foreground/60 bg-card px-4 py-8 text-center">

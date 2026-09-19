@@ -1,7 +1,7 @@
 "use client"
 import * as React from 'react'
 import Link from 'next/link'
-import { ChevronLeft, Minus, Plus, ScanLine } from 'lucide-react'
+import { Camera, ChevronLeft, Minus, Plus, ScanLine } from 'lucide-react'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { IconButton } from '@open-mercato/ui/primitives/icon-button'
 import { Input } from '@open-mercato/ui/primitives/input'
@@ -101,6 +101,10 @@ export type ScanFieldProps = {
   disabled?: boolean
   emphasis?: boolean
   inputRef?: React.Ref<HTMLInputElement>
+  /** Opens the camera. Given one, the icon beside the field is the camera and the submit
+   *  becomes an explicit button: typing stays the path that works without a secure context. */
+  onCamera?: () => void
+  cameraLabel?: string
 }
 
 /**
@@ -117,6 +121,8 @@ export function ScanField({
   disabled,
   emphasis,
   inputRef,
+  onCamera,
+  cameraLabel,
 }: ScanFieldProps) {
   const id = React.useId()
   return (
@@ -149,15 +155,21 @@ export function ScanField({
           inputClassName="h-full font-mono text-xl"
         />
         <Button
-          type="submit"
+          type={onCamera ? 'button' : 'submit'}
           variant={emphasis ? 'default' : 'outline'}
           disabled={disabled}
-          aria-label={submitLabel}
+          aria-label={onCamera ? cameraLabel ?? submitLabel : submitLabel}
           className="size-20 shrink-0 border-2 p-0"
+          onClick={onCamera}
         >
-          <ScanLine className="size-8" aria-hidden="true" />
+          {onCamera ? <Camera className="size-8" aria-hidden="true" /> : <ScanLine className="size-8" aria-hidden="true" />}
         </Button>
       </div>
+      {onCamera ? (
+        <Button type="submit" variant="outline" className={`${PANEL_ACTION} border-2`} disabled={disabled}>
+          {submitLabel}
+        </Button>
+      ) : null}
     </form>
   )
 }

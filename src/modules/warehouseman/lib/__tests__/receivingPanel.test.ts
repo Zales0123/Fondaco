@@ -1,6 +1,9 @@
 import { describe, expect, it } from '@jest/globals'
 import {
   buildReceivingListQuery,
+  describePalletLookupFailure,
+  adjustScanQuantity,
+  describePalletPrintOutcome,
   formatCountQuantity,
   normalizeScannedCode,
   parseCountQuantity,
@@ -9,6 +12,7 @@ import {
   productLabel,
   receivingSummaryHref,
   resolveApiMessage,
+  resolveCountQuantity,
 } from '../receivingPanel'
 
 describe('receiving hrefs', () => {
@@ -45,6 +49,14 @@ describe('normalizeScannedCode', () => {
   it('reports an empty scan as empty', () => {
     expect(normalizeScannedCode('   ')).toBe('')
   })
+
+  it('cleans a camera decode the same way it cleans a typed code', () => {
+    // The camera hands back the raw decoded value, padding and all, and the scan path
+    // feeds it through here before the lookup — so both paths ask for the same code.
+    expect(normalizeScannedCode(' PAL-000042 ')).toBe('PAL-000042')
+    expect(normalizeScannedCode('PAL\n000042')).toBe('PAL 000042')
+    expect(normalizeScannedCode('\t\n')).toBe('')
+  })
 })
 
 describe('parseCountQuantity', () => {
@@ -69,6 +81,29 @@ describe('parseCountQuantity', () => {
 
   it('refuses more precision than the column carries', () => {
     expect(parseCountQuantity('1.00001')).toBeNull()
+  })
+})
+
+describe('resolveCountQuantity', () => {
+  it('reads a blank field as one unit, because the scan itself is the count', () => {
+    // The camera adds a unit per scan and the quantity field is only a multiplier, so an
+    // untouched field must not be the validation error `parseCountQuantity` makes of it.
+    expect(resolveCountQuantity('')).toBe('1.0000')
+    expect(resolveCountQuantity('   ')).toBe('1.0000')
+    expect(resolveCountQuantity('\t\n')).toBe('1.0000')
+  })
+
+  it('keeps a typed multiplier exactly as the quantity parser reads it', () => {
+    expect(resolveCountQuantity('1')).toBe('1.0000')
+    expect(resolveCountQuantity('12')).toBe('12.0000')
+    expect(resolveCountQuantity('2,5')).toBe('2.5000')
+  })
+
+  it('still refuses what is typed but is not a quantity', () => {
+    expect(resolveCountQuantity('0')).toBeNull()
+    expect(resolveCountQuantity('abc')).toBeNull()
+    expect(resolveCountQuantity('-3')).toBeNull()
+    expect(resolveCountQuantity('1.00001')).toBeNull()
   })
 })
 
@@ -105,5 +140,96 @@ describe('productLabel', () => {
 
   it('keeps a real name', () => {
     expect(productLabel('Kabel USB-C 2m', 'unknown')).toBe('Kabel USB-C 2m')
+  })
+})
+
+describe('describePalletPrintOutcome', () => {
+  const messages = {
+    success: 'The pallet label is printing.',
+    failure: (reason: string) => `The pallet is there, the label is not: ${reason}`,
+    unknownReason: 'The printer did not say why.',
+  }
+
+  it('reports a printed label as a success', () => {
+    expect(describePalletPrintOutcome(null, messages)).toEqual({
+      kind: 'success',
+      message: 'The pallet label is printing.',
+    })
+  })
+
+  it('frames the printer refusal, which the server already localized', () => {
+    const busy = Object.assign(new Error('Drukarka etykiet jest zajęta.'), { status: 409 })
+    expect(describePalletPrintOutcome(busy, messages)).toEqual({
+      kind: 'warning',
+      message: 'The pallet is there, the label is not: Drukarka etykiet jest zajęta.',
+    })
+  })
+
+  it('falls back when the refusal says nothing', () => {
+    expect(describePalletPrintOutcome(Object.assign(new Error(''), { status: 503 }), messages)).toEqual({
+      kind: 'warning',
+      message: 'The pallet is there, the label is not: The printer did not say why.',
+    })
+    expect(describePalletPrintOutcome('printer exploded', messages)).toEqual({
+      kind: 'warning',
+      message: 'The pallet is there, the label is not: The printer did not say why.',
+    })
+  })
+
+  it('never reports the pallet itself as failed', () => {
+    // A printer that is off, busy, faulty or has nothing to print is still only ever a
+    // warning about the sticker: the pallet was committed before the print was attempted.
+    for (const status of [409, 422, 500, 502, 503]) {
+      const outcome = describePalletPrintOutcome(
+        Object.assign(new Error('Printer is off.'), { status }),
+        messages,
+      )
+      expect(outcome.kind).toBe('warning')
+      expect(outcome.message).toBe('The pallet is there, the label is not: Printer is off.')
+    }
+  })
+})
+
+describe('describePalletLookupFailure', () => {
+  const messages = { notFound: 'No pallet has code PAL-000042.', failed: 'Could not open the pallet.' }
+
+  it('names the code nobody has', () => {
+    expect(describePalletLookupFailure(Object.assign(new Error(''), { status: 404 }), messages))
+      .toBe('No pallet has code PAL-000042.')
+  })
+
+  it('keeps refusing a pallet that belongs to another document, by name', () => {
+    const other = Object.assign(new Error('Paleta należy do PZ/13/2026.'), { status: 409 })
+    expect(describePalletLookupFailure(other, messages)).toBe('Paleta należy do PZ/13/2026.')
+  })
+
+  it('prefers the server text over the caller fallback whenever there is one', () => {
+    const denied = Object.assign(new Error('Brak uprawnień.'), { status: 403 })
+    expect(describePalletLookupFailure(denied, messages)).toBe('Brak uprawnień.')
+  })
+
+  it('falls back when the failure says nothing at all', () => {
+    expect(describePalletLookupFailure(new Error(''), messages)).toBe('Could not open the pallet.')
+    expect(describePalletLookupFailure(undefined, messages)).toBe('Could not open the pallet.')
+  })
+})
+
+describe('adjustScanQuantity', () => {
+  it('steps by one in both directions', () => {
+    expect(adjustScanQuantity(1, 1)).toBe(2)
+    expect(adjustScanQuantity(12, -1)).toBe(11)
+  })
+
+  it('steps by ten, so a pallet of forty-eight is not forty-seven taps', () => {
+    expect(adjustScanQuantity(1, 10)).toBe(11)
+    expect(adjustScanQuantity(48, -10)).toBe(38)
+  })
+
+  it('never goes below one, because a scan asserts the product is on the pallet', () => {
+    // −10 from 3 is the ordinary way to reach this: the floor overshot and is coming back
+    // down. Landing on 0 or −7 would offer a count the server is bound to refuse.
+    expect(adjustScanQuantity(3, -10)).toBe(1)
+    expect(adjustScanQuantity(1, -1)).toBe(1)
+    expect(adjustScanQuantity(1, -10)).toBe(1)
   })
 })

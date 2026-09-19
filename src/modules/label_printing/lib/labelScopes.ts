@@ -9,7 +9,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { BarcodeSymbology } from './barcodeImage'
 
-export type LabelScopeId = 'catalog.product'
+export type LabelScopeId = 'catalog.product' | 'pz.pallet'
 
 export type LabelSubject = {
   symbology: BarcodeSymbology
@@ -126,8 +126,58 @@ const resolveCatalogProduct: LabelScopeResolver = async (productId, ctx) => {
   }
 }
 
+type PalletRow = {
+  id: string
+  code: string | null
+}
+
+/**
+ * A pallet carries its own code, generated at creation and immutable, so the
+ * label is a sticker for the carrier itself rather than for anything on it.
+ * Code128 because the code is an internal alphanumeric string, not a GTIN.
+ *
+ * Read as scalar SQL by id, like the catalog lookup above: `label_printing`
+ * must not take an ORM relation on a `pz` entity. Pallets are hard-deleted, so
+ * there is no `deleted_at` to filter — a deleted pallet is simply absent, and
+ * its sticker is waste paper anyway.
+ */
+const resolvePzPallet: LabelScopeResolver = async (palletId, ctx) => {
+  const rows = (await ctx.em.getConnection().execute(
+    `select id, code
+       from pz_pallets
+      where id = ? and tenant_id = ? and organization_id = ?
+      limit 1`,
+    [palletId, ctx.tenantId, ctx.organizationId],
+  )) as PalletRow[]
+
+  // A pallet from another tenant or organization matches nothing here, so it
+  // is indistinguishable from an unknown id — refused, never printed.
+  const pallet = rows[0]
+  if (!pallet) {
+    throw new LabelNotAvailableError(
+      'label_printing.print.error.noPallet',
+      `Pallet ${palletId} does not exist in this tenant and organization`,
+    )
+  }
+
+  const code = pallet.code?.trim()
+  if (!code) {
+    throw new LabelNotAvailableError(
+      'label_printing.print.error.noPalletCode',
+      `Pallet ${pallet.id} has no code to print`,
+    )
+  }
+
+  return {
+    symbology: 'code128',
+    value: code,
+    describe: `pallet ${code}`,
+  }
+}
+
 const RESOLVERS: Record<LabelScopeId, LabelScopeResolver> = {
   'catalog.product': resolveCatalogProduct,
+  'pz.pallet': resolvePzPallet,
 }
 
 export const LABEL_SCOPE_IDS = Object.keys(RESOLVERS) as LabelScopeId[]
