@@ -35,10 +35,29 @@ export function isStructuredNonErrorLogLine(line) {
   return STRUCTURED_PRETTY_NON_ERROR_PREFIX.test(line.trim())
 }
 
+// The Next.js dev request log: `METHOD url STATUS in DURATION (label: time, ...)`,
+// optionally indented with `│ ` for a nested fetch metric. The url is the one part
+// of a runtime log line whose text the application does not choose — it is whatever
+// a browser asked for — so a word in a query string must never decide whether the
+// runtime is healthy. `?stockPostingStatus=failed` is an ordinary filter the
+// warehouseman panel polls every minute, and it would otherwise latch the dev
+// supervisor into "Runtime error detected" for a request that answered 200.
+const REQUEST_LOG_PATTERN = /^(?:│\s+)*(?:GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)\s+\S+\s+(\d{3})\s+in\s+([^(]+?)(?:\s+\((.+)\))?$/
+
+// A served request, judged by its status rather than by its url. 5xx is left out:
+// that one is the runtime genuinely failing, and excluding it here would hide it.
+export function isNonFailingRequestLogLine(line) {
+  if (typeof line !== 'string') return false
+  const match = REQUEST_LOG_PATTERN.exec(stripStructuredLogPrefix(line.trim()))
+  if (!match) return false
+  return Number(match[1]) < 500
+}
+
 export function isNonRuntimeFailureLine(line) {
   return isBrowserForwardedLogLine(line)
     || isStackFrameLine(line)
     || isStructuredNonErrorLogLine(line)
+    || isNonFailingRequestLogLine(line)
 }
 
 const KMS_VAULT_FALLBACK_MESSAGE_PATTERN = /^\[shared:kms\] (?:Vault (?:read|write) (?:error|failed)\b|Vault write CAS conflict\b|No tenant DEK found in Vault\b|Failed to store tenant DEK in Vault\b)/

@@ -1,6 +1,6 @@
 # Lessons
 
-This catalog indexes 4 focused lessons without loading their full text. Route the task first, then read only records whose **modules**, standalone-harness **areas**, or **topics** match the work.
+This catalog indexes 5 focused lessons without loading their full text. Route the task first, then read only records whose **modules**, standalone-harness **areas**, or **topics** match the work.
 
 ## How to use this catalog
 
@@ -37,6 +37,10 @@ rg -l '"<area>"|"<module>"|"<topic>"' .ai/lessons/*.md
 ### testing
 
 - [A module test under src/ must import its jest globals, or yarn build fails](lessons/module-tests-must-import-jest-globals.md) — area:testing; module:platform; topic:validation-gate,typescript,app-modules
+
+### debugging
+
+- [A red dev splash can be a request URL, not a runtime error](lessons/dev-splash-runtime-error-can-be-a-request-url.md) — area:debugging; module:platform; topic:dev-runtime,logging,false-positive,validation-gate
 
 ### framework-context
 
