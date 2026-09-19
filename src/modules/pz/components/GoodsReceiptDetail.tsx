@@ -182,6 +182,7 @@ export function GoodsReceiptDetail({ id }: { id: string }) {
                 <TableHead scope="col">{t('pz.goodsReceipts.view.lines.column.sku')}</TableHead>
                 <TableHead scope="col">{t('pz.goodsReceipts.view.lines.column.quantity')}</TableHead>
                 <TableHead scope="col">{t('pz.goodsReceipts.view.lines.column.unit')}</TableHead>
+                <TableHead scope="col">{t('pz.goodsReceipts.view.lines.column.purchaseOrder')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -192,10 +193,20 @@ export function GoodsReceiptDetail({ id }: { id: string }) {
                   <TableCell>{line.catalogSnapshot?.sku ?? '—'}</TableCell>
                   <TableCell>{line.quantity}</TableCell>
                   <TableCell>{line.uomSnapshot?.code ?? '—'}</TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    {/*
+                      The snapshot, not a live lookup: it is what this document committed to
+                      when the line was saved, and it stays readable if the order is later
+                      renumbered or the purchasing module is unavailable.
+                    */}
+                    {line.purchaseOrderSnapshot
+                      ? `${line.purchaseOrderSnapshot.documentNumber} / ${line.purchaseOrderSnapshot.lineNumber}`
+                      : '—'}
+                  </TableCell>
                 </TableRow>
               )) : (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-muted-foreground">
+                  <TableCell colSpan={6} className="text-muted-foreground">
                     {t('pz.goodsReceipts.view.lines.empty')}
                   </TableCell>
                 </TableRow>

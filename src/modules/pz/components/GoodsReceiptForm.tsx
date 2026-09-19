@@ -181,6 +181,13 @@ export function toGoodsReceiptFormValues(item: GoodsReceiptListItem): GoodsRecei
       catalogProductId: line.catalogProductId,
       quantity: line.quantity,
       unit: line.unit ?? '',
+      purchaseOrderId: line.purchaseOrderId ?? '',
+      purchaseOrderLineId: line.purchaseOrderLineId ?? '',
+      // The snapshot is what the document already says, so an edit renders the chosen
+      // order without another lookup — and still shows it if the order has since changed.
+      purchaseOrderLabel: line.purchaseOrderSnapshot
+        ? `${line.purchaseOrderSnapshot.documentNumber} / ${line.purchaseOrderSnapshot.lineNumber}`
+        : '',
     })),
     updatedAt: item.updatedAt ?? null,
   }

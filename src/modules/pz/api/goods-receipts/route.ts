@@ -8,6 +8,7 @@ import { E } from '@/.mercato/generated/entities.ids.generated'
 import {
   GoodsReceipt,
   type GoodsReceiptCatalogSnapshot,
+  type GoodsReceiptPurchaseOrderSnapshot,
   type GoodsReceiptUomSnapshot,
   type GoodsReceiptWarehouseSnapshot,
 } from '../../data/entities'
@@ -127,6 +128,9 @@ type PzReadDatabase = {
     quantity: string
     unit: string | null
     uom_snapshot: GoodsReceiptUomSnapshot | null
+    purchase_order_id: string | null
+    purchase_order_line_id: string | null
+    purchase_order_snapshot: GoodsReceiptPurchaseOrderSnapshot | null
   }
   pz_pallets: {
     id: string
@@ -353,6 +357,11 @@ const goodsReceiptLineItemSchema = z.object({
   quantity: z.string(),
   unit: z.string().nullable(),
   uomSnapshot: z.object({ code: z.string().nullable(), productDefaultUnit: z.string().nullable() }).nullable(),
+  purchaseOrderId: z.string().uuid().nullable(),
+  purchaseOrderLineId: z.string().uuid().nullable(),
+  purchaseOrderSnapshot: z
+    .object({ documentNumber: z.string(), lineNumber: z.number().int() })
+    .nullable(),
 })
 
 const goodsReceiptListItemSchema = z.object({

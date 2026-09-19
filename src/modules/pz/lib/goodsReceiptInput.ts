@@ -14,6 +14,13 @@ export type GoodsReceiptLineInput = {
   /** Normalised decimal string at the storage precision; never a float. */
   quantity: string
   unit: string | null
+  /**
+   * The Purchase Order line this position announces against, or null for a delivery that
+   * arrived without one. Both ids travel together or not at all — an order without a line
+   * cannot say which of its positions is being settled.
+   */
+  purchaseOrderId: string | null
+  purchaseOrderLineId: string | null
 }
 
 export type GoodsReceiptWriteInput = {
@@ -173,7 +180,31 @@ export function parseGoodsReceiptWriteInput(
       )
       continue
     }
-    lines.push({ catalogProductId, quantity, unit: unit || null })
+
+    // Both halves of the Purchase Order reference are required together. A line naming an
+    // order but not a position could not be settled against anything, and a position with
+    // no order could not be scoped — so a half-filled reference is refused rather than
+    // stored as something nobody can act on.
+    const purchaseOrderId = asTrimmedString(line.purchaseOrderId)
+    const purchaseOrderLineId = asTrimmedString(line.purchaseOrderLineId)
+    if (purchaseOrderId || purchaseOrderLineId) {
+      if (!UUID.test(purchaseOrderId) || !UUID.test(purchaseOrderLineId)) {
+        fields.lines ??= translate(
+          'pz.goodsReceipts.errors.linePurchaseOrderInvalid',
+          'Position {position}: choose the purchase order line from the list.',
+          { position },
+        )
+        continue
+      }
+    }
+
+    lines.push({
+      catalogProductId,
+      quantity,
+      unit: unit || null,
+      purchaseOrderId: purchaseOrderId || null,
+      purchaseOrderLineId: purchaseOrderLineId || null,
+    })
   }
 
   if (Object.keys(fields).length > 0) {

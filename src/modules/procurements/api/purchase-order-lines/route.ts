@@ -18,6 +18,7 @@ import {
   type PurchaseOrderLineRow,
 } from '../../lib/purchaseOrderListItem'
 import { type ProcurementsReadDatabase, resolveScopedOrganizationIds } from '../readModel'
+import { readAnnouncedQuantities, toAnnouncementLimits } from '../announcementReads'
 
 const F = {
   id: 'id',
@@ -318,9 +319,36 @@ export const { metadata, GET } = makeCrudRoute({
   hooks: {
     afterList: async (payload, ctx) => {
       await decorateHeaders(payload as { items?: PurchaseOrderLineListItem[] }, ctx)
+      await decorateAnnouncementLimits(payload as { items?: PurchaseOrderLineListItem[] }, ctx)
     },
   },
 })
+
+/**
+ * Fills each row's announced and free quantities from the commitment ledger.
+ *
+ * Only for the ids on the page. A line whose limit is inconsistent — more announced than
+ * ordered — keeps `null` rather than a clamped zero: the buyer needs to see that the
+ * numbers do not add up, not a figure that hides it.
+ */
+async function decorateAnnouncementLimits(
+  payload: { items?: PurchaseOrderLineListItem[] },
+  ctx: CrudCtx,
+): Promise<void> {
+  const items = Array.isArray(payload.items) ? payload.items : []
+  if (items.length === 0) return
+  const announced = await readAnnouncedQuantities(ctx, items.map((item) => item.id))
+  const limits = toAnnouncementLimits(
+    items.map((item) => ({ id: item.id, quantityOrdered: item.quantityOrdered })),
+    announced,
+  )
+  for (const item of items) {
+    const limit = limits.get(item.id)
+    if (!limit) continue
+    item.quantityAnnounced = limit.announced
+    item.quantityFree = limit.isConsistent ? limit.free : null
+  }
+}
 
 /** The `{ $eq: NO_SUCH_ID }` sentinel above; anything else may still match a row. */
 function isImpossibleIdPredicate(predicate: unknown): boolean {
@@ -350,6 +378,8 @@ const purchaseOrderLineListItemSchema = z.object({
   unitPriceNet: z.string(),
   netValue: z.string().nullable(),
   expectedDate: z.string().nullable(),
+  quantityAnnounced: z.string().nullable(),
+  quantityFree: z.string().nullable(),
   updatedAt: z.string().nullable(),
 })
 

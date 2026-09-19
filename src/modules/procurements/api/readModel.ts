@@ -1,6 +1,7 @@
 import type { CrudCtx } from '@open-mercato/shared/lib/crud/factory'
 import type {
   PurchaseOrderCatalogSnapshot,
+  PurchaseOrderCommitmentSourceSnapshot,
   PurchaseOrderSupplierSnapshot,
   PurchaseOrderUomSnapshot,
   PurchaseOrderWarehouseSnapshot,
@@ -40,6 +41,21 @@ export type ProcurementsReadDatabase = {
     uom_snapshot: PurchaseOrderUomSnapshot | null
     unit_price_net: string
     expected_date: Date | string | null
+  }
+  procurements_purchase_order_commitments: {
+    id: string
+    purchase_order_id: string
+    purchase_order_line_id: string
+    tenant_id: string
+    organization_id: string
+    source_type: string
+    source_document_id: string
+    source_line_id: string
+    source_snapshot: PurchaseOrderCommitmentSourceSnapshot | null
+    quantity: string
+    status: string
+    released_at: Date | null
+    created_at: Date | string | null
   }
 }
 

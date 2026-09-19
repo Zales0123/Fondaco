@@ -233,5 +233,15 @@
   "pz.receiving.summary.subtitle": "Palety: {palletCount} ({closedCount} zamkniętych)",
   "pz.receiving.summary.title": "Podsumowanie przyjęcia",
   "pz.receiving.summary.totals": "Razem: oczekiwano {expected} · policzono {counted}",
-  "pz.receiving.summary.unknownProduct": "Towaru nie ma już w katalogu"
+  "pz.receiving.summary.unknownProduct": "Towaru nie ma już w katalogu",
+  "pz.goodsReceipts.form.lines.column.purchaseOrder": "Zamówienie zakupu",
+  "pz.goodsReceipts.form.lines.purchaseOrder.label": "Pozycja zamówienia zakupu dla pozycji {position}",
+  "pz.goodsReceipts.form.lines.purchaseOrder.placeholder": "Opcjonalnie — wyszukaj zamówienie",
+  "pz.goodsReceipts.form.lines.purchaseOrder.chooseProductFirst": "Najpierw wybierz produkt",
+  "pz.goodsReceipts.view.lines.column.purchaseOrder": "Zamówienie zakupu",
+  "pz.goodsReceipts.errors.linePurchaseOrderInvalid": "Pozycja {position}: wybierz pozycję zamówienia zakupu z listy.",
+  "pz.goodsReceipts.errors.linePurchaseOrderNotReleased": "Awizować można wyłącznie na zatwierdzone zamówienie zakupu.",
+  "pz.goodsReceipts.errors.linePurchaseOrderVariantMismatch": "Pozycja zamówienia zakupu dotyczy innego produktu niż ta pozycja.",
+  "pz.goodsReceipts.errors.linePurchaseOrderUnavailable": "Pozycja zamówienia zakupu wskazana przez tę pozycję nie jest już dostępna.",
+  "pz.goodsReceipts.errors.purchaseOrderReserveFailed": "Nie udało się zarezerwować ilości z zamówienia zakupu, więc dostawa nie została uwolniona."
 }

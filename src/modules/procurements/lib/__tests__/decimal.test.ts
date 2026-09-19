@@ -1,5 +1,13 @@
 import { describe, expect, it } from '@jest/globals'
-import { lineNetValue, multiplyDecimal, orderNetValue, sumDecimals } from '../decimal'
+import {
+  compareDecimal,
+  isPositiveDecimal,
+  lineNetValue,
+  multiplyDecimal,
+  orderNetValue,
+  subtractDecimal,
+  sumDecimals,
+} from '../decimal'
 
 describe('multiplyDecimal', () => {
   it('multiplies without floating-point drift', () => {
@@ -73,5 +81,44 @@ describe('orderNetValue', () => {
         { quantityOrdered: 'NaN', unitPriceNet: '1.0000' },
       ]),
     ).toBeNull()
+  })
+})
+
+describe('subtractDecimal', () => {
+  it('subtracts at quantity scale without drift', () => {
+    expect(subtractDecimal('100', '60')).toBe('40.0000')
+    expect(subtractDecimal('0.3', '0.1')).toBe('0.2000')
+  })
+
+  it('returns a negative result rather than clamping it', () => {
+    // The caller decides what "less than nothing" means; hiding it here would turn a ledger
+    // inconsistency into a plausible-looking zero.
+    expect(subtractDecimal('100', '140')).toBe('-40.0000')
+  })
+
+  it('is null when either side is not a number', () => {
+    expect(subtractDecimal('abc', '1')).toBeNull()
+    expect(subtractDecimal('1', '')).toBeNull()
+  })
+})
+
+describe('compareDecimal', () => {
+  it('orders values regardless of how many places they are written to', () => {
+    expect(compareDecimal('40', '40.0000')).toBe(0)
+    expect(compareDecimal('40.0001', '40')).toBe(1)
+    expect(compareDecimal('39.9999', '40')).toBe(-1)
+  })
+
+  it('is null when either side is unreadable', () => {
+    expect(compareDecimal('x', '1')).toBeNull()
+  })
+})
+
+describe('isPositiveDecimal', () => {
+  it('accepts only a readable quantity above zero', () => {
+    expect(isPositiveDecimal('0.0001')).toBe(true)
+    expect(isPositiveDecimal('0')).toBe(false)
+    expect(isPositiveDecimal('-1')).toBe(false)
+    expect(isPositiveDecimal('nope')).toBe(false)
   })
 })

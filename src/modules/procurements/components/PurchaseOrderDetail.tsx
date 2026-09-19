@@ -36,6 +36,7 @@ import {
   useWarehouseNames,
   type PurchaseOrderTransition,
 } from './purchaseOrdersPresentation'
+import { PurchaseOrderAnnouncements } from './PurchaseOrderAnnouncements'
 
 type PurchaseOrdersResponse = { items: PurchaseOrderListItem[] }
 
@@ -225,6 +226,12 @@ export function PurchaseOrderDetail({ id }: { id: string }) {
                 </TableHead>
                 <TableHead scope="col">{t('procurements.purchaseOrders.view.lines.column.unit')}</TableHead>
                 <TableHead scope="col" className="text-right">
+                  {t('procurements.purchaseOrders.view.lines.column.announced')}
+                </TableHead>
+                <TableHead scope="col" className="text-right">
+                  {t('procurements.purchaseOrders.view.lines.column.free')}
+                </TableHead>
+                <TableHead scope="col" className="text-right">
                   {t('procurements.purchaseOrders.view.lines.column.unitPrice')}
                 </TableHead>
                 <TableHead scope="col" className="text-right">
@@ -246,6 +253,19 @@ export function PurchaseOrderDetail({ id }: { id: string }) {
                   </TableCell>
                   <TableCell>{line.uomSnapshot?.code ?? line.unit ?? '—'}</TableCell>
                   <TableCell className="text-right tabular-nums">
+                    {formatQuantity(line.quantityAnnounced)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {/* Null is "the ledger does not add up", not "nothing left to announce". */}
+                    {line.quantityFree === null
+                      ? (
+                        <span className="text-muted-foreground">
+                          {t('procurements.purchaseOrderLines.table.freeUnknown')}
+                        </span>
+                      )
+                      : formatQuantity(line.quantityFree)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
                     {formatMoney(line.unitPriceNet, item.currencyCode, locale)}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
@@ -255,7 +275,7 @@ export function PurchaseOrderDetail({ id }: { id: string }) {
                 </TableRow>
               )) : (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-muted-foreground">
+                  <TableCell colSpan={10} className="text-muted-foreground">
                     {t('procurements.purchaseOrders.view.lines.empty')}
                   </TableCell>
                 </TableRow>
@@ -264,6 +284,8 @@ export function PurchaseOrderDetail({ id }: { id: string }) {
           </Table>
         </div>
       </section>
+
+      <PurchaseOrderAnnouncements purchaseOrderId={item.id} />
       {ConfirmDialogElement}
     </div>
   )

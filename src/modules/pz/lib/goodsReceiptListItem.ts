@@ -1,5 +1,6 @@
 import type {
   GoodsReceiptCatalogSnapshot,
+  GoodsReceiptPurchaseOrderSnapshot,
   GoodsReceiptStatus,
   GoodsReceiptUomSnapshot,
   GoodsReceiptWarehouseSnapshot,
@@ -14,6 +15,10 @@ export type GoodsReceiptLineItem = {
   quantity: string
   unit: string | null
   uomSnapshot: GoodsReceiptUomSnapshot | null
+  /** The purchase order position this line settles, or null for a delivery with no order. */
+  purchaseOrderId: string | null
+  purchaseOrderLineId: string | null
+  purchaseOrderSnapshot: GoodsReceiptPurchaseOrderSnapshot | null
 }
 
 /** Raw projection the query engine returns for a Goods Receipt list row. */
@@ -88,6 +93,9 @@ export type GoodsReceiptLineRow = {
   quantity: string | number
   unit: string | null
   uom_snapshot: GoodsReceiptUomSnapshot | null
+  purchase_order_id: string | null
+  purchase_order_line_id: string | null
+  purchase_order_snapshot: GoodsReceiptPurchaseOrderSnapshot | null
 }
 
 export function toGoodsReceiptLineItem(row: GoodsReceiptLineRow): GoodsReceiptLineItem {
@@ -100,6 +108,9 @@ export function toGoodsReceiptLineItem(row: GoodsReceiptLineRow): GoodsReceiptLi
     quantity: String(row.quantity),
     unit: row.unit ?? null,
     uomSnapshot: row.uom_snapshot ?? null,
+    purchaseOrderId: row.purchase_order_id ?? null,
+    purchaseOrderLineId: row.purchase_order_line_id ?? null,
+    purchaseOrderSnapshot: row.purchase_order_snapshot ?? null,
   }
 }
 

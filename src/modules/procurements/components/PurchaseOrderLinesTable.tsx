@@ -132,10 +132,37 @@ function buildColumns(t: Translate, locale: string): ColumnDef<LineRow>[] {
       ),
     },
     {
+      accessorKey: 'quantityAnnounced',
+      header: t('procurements.purchaseOrderLines.table.column.announced'),
+      enableSorting: false,
+      meta: { priority: 5, align: 'right' },
+      cell: ({ row }) => (
+        <span className="tabular-nums">{formatQuantity(row.original.quantityAnnounced)}</span>
+      ),
+    },
+    {
+      accessorKey: 'quantityFree',
+      header: t('procurements.purchaseOrderLines.table.column.free'),
+      enableSorting: false,
+      meta: { priority: 6, align: 'right' },
+      cell: ({ row }) => {
+        // A null free quantity is not "nothing left" — it is "the ledger does not add up",
+        // which the buyer has to be able to tell apart from a fully announced line.
+        if (row.original.quantityFree === null) {
+          return (
+            <span className="text-muted-foreground" title={t('procurements.purchaseOrderLines.table.freeUnknownHint')}>
+              {t('procurements.purchaseOrderLines.table.freeUnknown')}
+            </span>
+          )
+        }
+        return <span className="tabular-nums">{formatQuantity(row.original.quantityFree)}</span>
+      },
+    },
+    {
       accessorKey: 'netValue',
       header: t('procurements.purchaseOrderLines.table.column.netValue'),
       enableSorting: false,
-      meta: { priority: 5, align: 'right' },
+      meta: { priority: 7, align: 'right' },
       cell: ({ row }) => (
         <span className="tabular-nums">
           {formatMoney(row.original.netValue, row.original.currencyCode, locale)}
@@ -146,7 +173,7 @@ function buildColumns(t: Translate, locale: string): ColumnDef<LineRow>[] {
       accessorKey: 'expectedDate',
       header: t('procurements.purchaseOrderLines.table.column.expectedDate'),
       enableSorting: true,
-      meta: { priority: 6 },
+      meta: { priority: 8 },
       cell: ({ getValue }) => {
         const value = getValue()
         return (typeof value === 'string' ? formatDisplayDate(value, locale) : null) ?? '—'
@@ -156,7 +183,7 @@ function buildColumns(t: Translate, locale: string): ColumnDef<LineRow>[] {
       accessorKey: 'status',
       header: t('procurements.purchaseOrderLines.table.column.status'),
       enableSorting: false,
-      meta: { priority: 7 },
+      meta: { priority: 9 },
       cell: ({ row }) => (
         <StatusBadge variant={PURCHASE_ORDER_STATUS_VARIANTS[row.original.status]} dot>
           {t(`procurements.purchaseOrders.status.${row.original.status}`)}
@@ -167,7 +194,7 @@ function buildColumns(t: Translate, locale: string): ColumnDef<LineRow>[] {
       accessorKey: 'warehouseLabel',
       header: t('procurements.purchaseOrderLines.table.column.warehouse'),
       enableSorting: false,
-      meta: { priority: 8 },
+      meta: { priority: 10 },
     },
   ]
 }

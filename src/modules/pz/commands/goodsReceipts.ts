@@ -8,6 +8,7 @@ import {
   type CommandUndoLogEntry,
 } from '@open-mercato/shared/lib/commands'
 import { runCrudCommandWrite } from '@open-mercato/shared/lib/commands/runCrudCommandWrite'
+import type { CommandBus } from '@open-mercato/shared/lib/commands/command-bus'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import { buildChanges, emitCrudSideEffects, emitCrudUndoSideEffects } from '@open-mercato/shared/lib/commands/helpers'
 import { makeCreateRedo, resolveRedoSnapshot } from '@open-mercato/shared/lib/commands/redo'
@@ -38,6 +39,7 @@ import {
   Pallet,
   FROZEN_GOODS_RECEIPT_STATUSES,
   type GoodsReceiptCatalogSnapshot,
+  type GoodsReceiptPurchaseOrderSnapshot,
   type GoodsReceiptStatus,
   type GoodsReceiptUomSnapshot,
   type GoodsReceiptWarehouseSnapshot,
@@ -48,6 +50,11 @@ import {
   type GoodsReceiptWriteInput,
   type TranslateFn,
 } from '../lib/goodsReceiptInput'
+import {
+  resolvePurchaseOrderReferences,
+  type PurchaseOrderLineReference,
+  type PurchaseOrderReferenceFailure,
+} from '../lib/purchaseOrderReference'
 
 const logger = createLogger('pz').child({ component: 'goods-receipt-commands' })
 
@@ -65,6 +72,9 @@ export type SerializedGoodsReceiptLine = {
   quantity: string
   unit: string | null
   uomSnapshot: GoodsReceiptUomSnapshot | null
+  purchaseOrderId: string | null
+  purchaseOrderLineId: string | null
+  purchaseOrderSnapshot: GoodsReceiptPurchaseOrderSnapshot | null
 }
 
 /**
@@ -297,6 +307,68 @@ export async function resolveCatalogLines(
   return resolved
 }
 
+/**
+ * Resolves whichever lines name a Purchase Order position, and refuses the save if any of
+ * them cannot be honoured.
+ *
+ * Lines without a reference are left alone: a delivery that arrived without an order — a
+ * sample, a warranty replacement — is an ordinary document here, not an incomplete one.
+ */
+export async function resolvePurchaseOrderLinks(
+  ctx: CommandRuntimeContext,
+  scope: GoodsReceiptScope,
+  lines: readonly {
+    catalogProductId: string
+    purchaseOrderId: string | null
+    purchaseOrderLineId: string | null
+  }[],
+  catalog: Map<string, ResolvedCatalogLine>,
+  translate: TranslateFn,
+): Promise<Map<string, PurchaseOrderLineReference>> {
+  const requests = lines
+    .filter((line) => line.purchaseOrderId && line.purchaseOrderLineId)
+    .map((line) => ({
+      purchaseOrderId: line.purchaseOrderId as string,
+      purchaseOrderLineId: line.purchaseOrderLineId as string,
+      // The variant the document will actually store, not something the caller supplied.
+      catalogVariantId: (catalog.get(line.catalogProductId) as ResolvedCatalogLine).catalogVariantId,
+    }))
+  if (requests.length === 0) return new Map()
+
+  const { resolved, failures } = await resolvePurchaseOrderReferences(ctx, scope, requests)
+  if (failures.length > 0) {
+    throw goodsReceiptFieldError(validationFailed(translate), {
+      lines: purchaseOrderFailureMessage(failures[0], translate),
+    })
+  }
+  return resolved
+}
+
+function purchaseOrderFailureMessage(
+  failure: PurchaseOrderReferenceFailure,
+  translate: TranslateFn,
+): string {
+  switch (failure.reason) {
+    case 'order_not_released':
+      return translate(
+        'pz.goodsReceipts.errors.linePurchaseOrderNotReleased',
+        'Only a released purchase order can be announced against.',
+      )
+    case 'variant_mismatch':
+      return translate(
+        'pz.goodsReceipts.errors.linePurchaseOrderVariantMismatch',
+        'The purchase order line is for a different product than this position.',
+      )
+    case 'order_mismatch':
+    case 'line_missing':
+    default:
+      return translate(
+        'pz.goodsReceipts.errors.linePurchaseOrderUnavailable',
+        'The purchase order line this position names is no longer available.',
+      )
+  }
+}
+
 export function buildUomSnapshot(unit: string | null, productDefaultUnit: string | null): GoodsReceiptUomSnapshot {
   return { code: unit ?? productDefaultUnit, productDefaultUnit }
 }
@@ -324,6 +396,9 @@ export function serializeGoodsReceiptLine(line: GoodsReceiptLine): SerializedGoo
     quantity: line.quantity,
     unit: line.unit ?? null,
     uomSnapshot: line.uomSnapshot ?? null,
+    purchaseOrderId: line.purchaseOrderId ?? null,
+    purchaseOrderLineId: line.purchaseOrderLineId ?? null,
+    purchaseOrderSnapshot: line.purchaseOrderSnapshot ?? null,
   }
 }
 
@@ -422,6 +497,9 @@ export function buildGoodsReceiptLine(
     quantity: string
     unit: string | null
     resolved: ResolvedCatalogLine
+    purchaseOrderId?: string | null
+    purchaseOrderLineId?: string | null
+    purchaseOrderSnapshot?: GoodsReceiptPurchaseOrderSnapshot | null
     now: Date
   },
 ): GoodsReceiptLine {
@@ -437,6 +515,9 @@ export function buildGoodsReceiptLine(
     quantity: args.quantity,
     unit: args.unit ?? args.resolved.productDefaultUnit,
     uomSnapshot: buildUomSnapshot(args.unit, args.resolved.productDefaultUnit),
+    purchaseOrderId: args.purchaseOrderId ?? null,
+    purchaseOrderLineId: args.purchaseOrderLineId ?? null,
+    purchaseOrderSnapshot: args.purchaseOrderSnapshot ?? null,
     createdAt: args.now,
     updatedAt: args.now,
   })
@@ -509,6 +590,11 @@ function createLineFromSnapshot(
     quantity: line.quantity,
     unit: line.unit,
     uomSnapshot: line.uomSnapshot,
+    // Restored verbatim: undo has to put back the document as it stood, and re-resolving
+    // the reference could quietly drop a link whose order has since been withdrawn.
+    purchaseOrderId: line.purchaseOrderId,
+    purchaseOrderLineId: line.purchaseOrderLineId,
+    purchaseOrderSnapshot: line.purchaseOrderSnapshot,
     createdAt: new Date(snapshot.createdAt),
     updatedAt: new Date(snapshot.updatedAt),
   })
@@ -594,6 +680,7 @@ const createGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
       input.lines.map((line) => line.catalogProductId),
       translate,
     )
+    const purchaseOrderLinks = await resolvePurchaseOrderLinks(ctx, scope, input.lines, catalog, translate)
 
     const now = new Date()
     const receipt = em.create(GoodsReceipt, {
@@ -611,8 +698,9 @@ const createGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
       createdAt: now,
       updatedAt: now,
     })
-    const lines = input.lines.map((line, index) =>
-      buildGoodsReceiptLine(em, {
+    const lines = input.lines.map((line, index) => {
+      const link = line.purchaseOrderLineId ? purchaseOrderLinks.get(line.purchaseOrderLineId) : undefined
+      return buildGoodsReceiptLine(em, {
         receipt,
         scope,
         lineNumber: index + 1,
@@ -620,9 +708,12 @@ const createGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
         quantity: line.quantity,
         unit: line.unit,
         resolved: catalog.get(line.catalogProductId) as ResolvedCatalogLine,
+        purchaseOrderId: link?.purchaseOrderId ?? null,
+        purchaseOrderLineId: link?.purchaseOrderLineId ?? null,
+        purchaseOrderSnapshot: link?.snapshot ?? null,
         now,
-      }),
-    )
+      })
+    })
 
     try {
       await runCrudCommandWrite<GoodsReceipt>({
@@ -1044,6 +1135,7 @@ const updateGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
       input.lines.map((line) => line.catalogProductId),
       translate,
     )
+    const purchaseOrderLinks = await resolvePurchaseOrderLinks(ctx, scope, input.lines, catalog, translate)
 
     let receipt!: GoodsReceipt
     let replacements: GoodsReceiptLine[] = []
@@ -1076,8 +1168,9 @@ const updateGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
             receipt.supplierName = input.supplierName
             receipt.warehouseId = input.warehouseId
             receipt.updatedAt = now
-            replacements = input.lines.map((line, index) =>
-              buildGoodsReceiptLine(tx, {
+            replacements = input.lines.map((line, index) => {
+              const link = line.purchaseOrderLineId ? purchaseOrderLinks.get(line.purchaseOrderLineId) : undefined
+              return buildGoodsReceiptLine(tx, {
                 receipt,
                 scope,
                 lineNumber: index + 1,
@@ -1085,9 +1178,12 @@ const updateGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
                 quantity: line.quantity,
                 unit: line.unit,
                 resolved: catalog.get(line.catalogProductId) as ResolvedCatalogLine,
+                purchaseOrderId: link?.purchaseOrderId ?? null,
+                purchaseOrderLineId: link?.purchaseOrderLineId ?? null,
+                purchaseOrderSnapshot: link?.snapshot ?? null,
                 now,
-              }),
-            )
+              })
+            })
             tx.persist(receipt)
             for (const line of replacements) tx.persist(line)
           },
@@ -1352,6 +1448,76 @@ const deleteGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
 registerCommand(updateGoodsReceiptCommand)
 registerCommand(deleteGoodsReceiptCommand)
 
+/**
+ * Claims each linked line's quantity on the purchase order it names.
+ *
+ * `pz` owns the announcement; `procurements` owns how much of an order may still be
+ * announced. The two meet over the command bus — a command id, not an import — so neither
+ * module compiles against the other's entities and a build without `procurements` still has
+ * a working goods receipt.
+ *
+ * The reservation commits in its own transaction, so it is deliberately idempotent on the
+ * document id: if this release fails after it, the retry reuses the same claims instead of
+ * adding a second set. The residue that leaves — a claim held by a document that never
+ * reached the floor — understates what is free to announce and is cleared by withdrawing.
+ * The opposite residue, a released document holding no claim, would let the same order be
+ * announced twice, so the order of these two steps is not interchangeable.
+ */
+async function reservePurchaseOrderQuantities(
+  ctx: CommandRuntimeContext,
+  scope: GoodsReceiptScope,
+  receipt: GoodsReceipt,
+  lines: readonly GoodsReceiptLine[],
+  translate: TranslateFn,
+): Promise<void> {
+  const linked = lines.filter((line) => line.purchaseOrderId && line.purchaseOrderLineId)
+  if (linked.length === 0) return
+
+  const commandBus = ctx.container.resolve('commandBus') as CommandBus
+  try {
+    await commandBus.execute('procurements.commitments.reserve', {
+      input: {
+        sourceType: 'awizo',
+        sourceDocumentId: String(receipt.id),
+        sourceDocumentNumber: receipt.documentNumber,
+        lines: linked.map((line) => ({
+          purchaseOrderLineId: String(line.purchaseOrderLineId),
+          sourceLineId: String(line.id),
+          quantity: String(line.quantity),
+          lineNumber: line.lineNumber,
+        })),
+      },
+      ctx,
+    })
+  } catch (error) {
+    // A refusal from purchasing is the user's answer — over the free limit, or an order that
+    // is no longer released — and reaches the caller unchanged.
+    if (isCrudHttpError(error)) throw error
+    logger.error('Reserving purchase order quantities failed', { err: error, receiptId: String(receipt.id) })
+    throw conflict(
+      translate(
+        'pz.goodsReceipts.errors.purchaseOrderReserveFailed',
+        'The purchase order quantities this delivery announces could not be reserved, so it was not released.',
+      ),
+    )
+  }
+}
+
+/**
+ * Hands a document's claims back. Releasing nothing is success: a delivery with no purchase
+ * order behind it must still be withdrawable.
+ */
+async function releasePurchaseOrderQuantities(
+  ctx: CommandRuntimeContext,
+  receiptId: string,
+): Promise<void> {
+  const commandBus = ctx.container.resolve('commandBus') as CommandBus
+  await commandBus.execute('procurements.commitments.release', {
+    input: { sourceType: 'awizo', sourceDocumentId: receiptId },
+    ctx,
+  })
+}
+
 const releaseGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsReceipt> = {
   id: 'pz.goodsReceipts.release',
   isUndoable: false,
@@ -1379,6 +1545,12 @@ const releaseGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsR
             throw conflict(translate('pz.goodsReceipts.errors.notDraft', 'Only a draft goods receipt can be released.'))
           }
           assertGoodsReceiptVersion(receipt, id, expectedVersion)
+        },
+        async ({ em: tx }) => {
+          // Releasing to the floor is the moment an announcement becomes a claim on the
+          // purchase order. It happens after the state and version have been checked under
+          // lock, so nothing is claimed for a document that is not about to be released.
+          await reservePurchaseOrderQuantities(ctx, scope, receipt, await findScopedLines(tx, id, scope), translate)
         },
         ({ em: tx }) => {
           receipt.status = 'receiving'
@@ -1444,6 +1616,11 @@ const withdrawGoodsReceiptCommand: CommandHandler<Record<string, unknown>, Goods
               translate('pz.goodsReceipts.errors.withdrawHasPallets', 'A goods receipt with pallets cannot be withdrawn.'),
             )
           }
+        },
+        async () => {
+          // Back to a draft means the delivery is no longer scheduled, so whatever it claimed
+          // from its purchase orders goes back to their free quantity.
+          await releasePurchaseOrderQuantities(ctx, id)
         },
         ({ em: tx }) => {
           receipt.status = 'draft'

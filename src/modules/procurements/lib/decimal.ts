@@ -10,6 +10,9 @@
 /** Money on a purchase order is rounded to two places, the way an invoice states it. */
 export const MONEY_SCALE = 2
 
+/** Quantities keep all four places the `numeric(18,4)` columns store, so none is rounded away. */
+export const QUANTITY_SCALE = 4
+
 type Scaled = { units: bigint; scale: number }
 
 /** Parses a canonical decimal string (`-12.3400`) into scaled integer units. */
@@ -68,6 +71,37 @@ export function sumDecimals(values: readonly string[], scale: number = MONEY_SCA
     total += rescale(parsed, scale)
   }
   return format(total, scale)
+}
+
+/**
+ * `left - right` at a fixed scale. Returns `null` when either side is unreadable, so a
+ * caller shows a dash instead of a quantity nobody can vouch for.
+ */
+export function subtractDecimal(left: string, right: string, scale: number = QUANTITY_SCALE): string | null {
+  const a = parseDecimal(left)
+  const b = parseDecimal(right)
+  if (!a || !b) return null
+  return format(rescale(a, scale) - rescale(b, scale), scale)
+}
+
+/**
+ * Orders two decimal strings: negative when `left < right`, 0 when equal, positive when
+ * greater. `null` when either side is unreadable — the caller must decide what an
+ * unanswerable comparison means rather than get a silent `false`.
+ */
+export function compareDecimal(left: string, right: string, scale: number = QUANTITY_SCALE): number | null {
+  const a = parseDecimal(left)
+  const b = parseDecimal(right)
+  if (!a || !b) return null
+  const difference = rescale(a, scale) - rescale(b, scale)
+  if (difference === 0n) return 0
+  return difference < 0n ? -1 : 1
+}
+
+/** True only for a readable, strictly positive quantity; an unparseable string is not positive. */
+export function isPositiveDecimal(value: string, scale: number = QUANTITY_SCALE): boolean {
+  const comparison = compareDecimal(value, '0', scale)
+  return comparison !== null && comparison > 0
 }
 
 /**
