@@ -55,24 +55,47 @@ export function isCalendarDay(value: string): boolean {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
 }
 
+/** The largest quantity a JSON number can carry without `numeric(18,4)` losing digits to binary floating point. */
+export const MAX_SAFE_NUMERIC_QUANTITY = Number.MAX_SAFE_INTEGER / 10 ** QUANTITY_SCALE
+
 /**
  * Accepts what a person types — a decimal comma included — and returns the canonical
  * string the column stores, or `null` when the value is not a quantity a document can
  * carry. Zero and negatives are not quantities here: a line that says nothing arrived is
  * a line that should not exist.
+ *
+ * The canonicalisation is pure string work. `Number('12345678901234.5678')` is already a
+ * different number by the time it is read back, so routing a quantity through a float
+ * would quietly change what the document says arrived. A JSON number wide enough to have
+ * lost digits before it reached us is refused rather than trusted.
  */
 export function normalizeQuantity(value: unknown): string | null {
-  const raw = typeof value === 'number' ? String(value) : typeof value === 'string' ? value.trim() : ''
+  let raw: string
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || Math.abs(value) > MAX_SAFE_NUMERIC_QUANTITY) return null
+    raw = String(value)
+  } else if (typeof value === 'string') {
+    raw = value.trim()
+  } else {
+    return null
+  }
   if (!raw) return null
+
   const normalized = raw.replace(',', '.')
-  if (!/^\d*\.?\d+$/.test(normalized)) return null
-  const [integer = '', fraction = ''] = normalized.split('.')
-  if (fraction.length > QUANTITY_SCALE) return null
+  // Exponent notation is refused too: it is never what a person typed on a delivery note.
+  const match = /^(\d*)(?:\.(\d*))?$/.exec(normalized)
+  if (!match) return null
+  const [, rawInteger = '', rawFraction = ''] = match
+  if (!rawInteger && !rawFraction) return null
+  if (rawFraction.length > QUANTITY_SCALE) return null
+
+  const integer = rawInteger.replace(/^0+/, '')
   // Refused here rather than in Postgres, where it would surface as an opaque write error.
-  if (integer.replace(/^0+/, '').length > QUANTITY_INTEGER_DIGITS) return null
-  const parsed = Number(normalized)
-  if (!Number.isFinite(parsed) || parsed <= 0) return null
-  return parsed.toFixed(QUANTITY_SCALE)
+  if (integer.length > QUANTITY_INTEGER_DIGITS) return null
+  const fraction = rawFraction.padEnd(QUANTITY_SCALE, '0')
+  if (!integer && !fraction.replace(/0+$/, '')) return null
+
+  return `${integer || '0'}.${fraction}`
 }
 
 export function parseGoodsReceiptWriteInput(

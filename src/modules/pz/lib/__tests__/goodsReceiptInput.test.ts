@@ -56,6 +56,30 @@ describe('normalizeQuantity', () => {
     expect(normalizeQuantity('9'.repeat(15))).toBeNull()
     expect(normalizeQuantity(`0000${'9'.repeat(14)}`)).toBe(`${'9'.repeat(14)}.0000`)
   })
+
+  it('carries a wide decimal through exactly, because a float would change what arrived', () => {
+    expect(normalizeQuantity('12345678901234.5678')).toBe('12345678901234.5678')
+    expect(normalizeQuantity('99999999999999.9999')).toBe('99999999999999.9999')
+  })
+
+  it('refuses a JSON number too wide to have survived the trip', () => {
+    expect(normalizeQuantity(12345678901234.5678)).toBeNull()
+    expect(normalizeQuantity(900719925474.0991)).toBe('900719925474.0991')
+  })
+
+  it('refuses exponent notation, which is never what a delivery note says', () => {
+    expect(normalizeQuantity('1e5')).toBeNull()
+    expect(normalizeQuantity('1E5')).toBeNull()
+  })
+
+  it('treats an all-zero value as no quantity at all', () => {
+    expect(normalizeQuantity('0.0000')).toBeNull()
+    expect(normalizeQuantity('000')).toBeNull()
+  })
+
+  it('accepts a bare fractional value', () => {
+    expect(normalizeQuantity('.5')).toBe('0.5000')
+  })
 })
 
 describe('isCalendarDay', () => {

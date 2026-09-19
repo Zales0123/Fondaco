@@ -42,24 +42,42 @@ async function createWarehouse(request: APIRequestContext): Promise<string> {
   return body.id as string
 }
 
-async function createProduct(request: APIRequestContext, suffix: string): Promise<{ productId: string; variantId: string }> {
-  const productResponse = await request.post('/api/catalog/products', {
+async function createBareProduct(request: APIRequestContext, suffix: string): Promise<string> {
+  const response = await request.post('/api/catalog/products', {
     data: { title: `PZ QA product ${suffix} ${RUN}`, sku: `PZQA-${suffix}-${RUN}`, defaultUnit: 'pc' },
     failOnStatusCode: false,
   })
-  expect(productResponse.status(), `product -> ${productResponse.status()}: ${await productResponse.text()}`).toBeLessThan(400)
-  const product = (await productResponse.json()) as Created
+  expect(response.status(), `product -> ${response.status()}: ${await response.text()}`).toBeLessThan(400)
+  const product = (await response.json()) as Created
   expect(product.id, 'product id missing').toBeTruthy()
+  return product.id as string
+}
 
-  const variantResponse = await request.post('/api/catalog/variants', {
-    data: { productId: product.id, sku: `PZQA-${suffix}-${RUN}-V1`, isDefault: true, isActive: true },
+async function createVariant(
+  request: APIRequestContext,
+  productId: string,
+  sku: string,
+  isDefault: boolean,
+): Promise<string> {
+  const response = await request.post('/api/catalog/variants', {
+    data: { productId, sku, isDefault, isActive: true },
     failOnStatusCode: false,
   })
-  expect(variantResponse.status(), `variant -> ${variantResponse.status()}: ${await variantResponse.text()}`).toBeLessThan(400)
-  const variant = (await variantResponse.json()) as Created
+  expect(response.status(), `variant -> ${response.status()}: ${await response.text()}`).toBeLessThan(400)
+  const variant = (await response.json()) as Created
   expect(variant.id, 'variant id missing').toBeTruthy()
+  return variant.id as string
+}
 
-  return { productId: product.id as string, variantId: variant.id as string }
+/**
+ * Every product gets a non-default variant FIRST and its default second, so a regression to
+ * "take whichever variant comes back first" stores the wrong id and the assertions catch it.
+ */
+async function createProduct(request: APIRequestContext, suffix: string): Promise<{ productId: string; variantId: string }> {
+  const productId = await createBareProduct(request, suffix)
+  await createVariant(request, productId, `PZQA-${suffix}-${RUN}-ALT`, false)
+  const variantId = await createVariant(request, productId, `PZQA-${suffix}-${RUN}-V1`, true)
+  return { productId, variantId }
 }
 
 function yesterday(): string {
@@ -130,10 +148,22 @@ async function documentNumberExists(request: APIRequestContext, documentNumber: 
 }
 
 /**
- * Fills a searchable picker without touching the mouse: type, wait for the option to be
- * offered, then take it with the keyboard. Typing key by key is what the picker listens
- * for, and waiting for the option keeps the interaction deterministic without sleeping.
+ * Presses Tab (or Shift+Tab) until the wanted control has focus, and fails loudly if it is
+ * never reached. Every step of the keyboard test moves through real focus order this way —
+ * calling `focus()` on the next control would prove nothing about whether a keyboard user
+ * can get there.
  */
+async function tabUntilFocused(page: Page, target: Locator, options: { shift?: boolean; limit?: number } = {}): Promise<void> {
+  const key = options.shift ? 'Shift+Tab' : 'Tab'
+  const limit = options.limit ?? 12
+  for (let step = 0; step < limit; step += 1) {
+    await page.keyboard.press(key)
+    if (await target.evaluate((node) => node === document.activeElement).catch(() => false)) return
+  }
+  throw new Error(`[internal] ${key} did not reach the expected control within ${limit} presses`)
+}
+
+/** Fills a searchable picker that already has focus, then takes an option with the keyboard. */
 async function chooseOptionByKeyboard(page: Page, optionName: RegExp, query: string): Promise<void> {
   await page.keyboard.type(query, { delay: 15 })
   await expect(page.getByRole('option', { name: optionName }).first()).toBeVisible({ timeout: 20_000 })
@@ -141,15 +171,20 @@ async function chooseOptionByKeyboard(page: Page, optionName: RegExp, query: str
   await page.keyboard.press('Enter')
 }
 
-/** Opens the date picker from the keyboard and commits today, which is never a future day. */
+/** Opens the focused date picker and commits today, which is never a future day. */
 async function pickTodayByKeyboard(page: Page): Promise<void> {
   await page.keyboard.press('Enter')
   await expect(page.getByRole('button', { name: /^Today,/ })).toBeFocused()
   await page.keyboard.press('Enter')
   const apply = page.getByRole('button', { name: /^(Apply|Zastosuj)$/ })
   await expect(apply).toBeVisible()
-  await apply.press('Enter')
+  await tabUntilFocused(page, apply)
+  await page.keyboard.press('Enter')
+  // Tabbing on while the popover is still closing would walk its focus trap instead of the
+  // form, so wait for it to be gone before moving on.
+  await expect(apply).toHaveCount(0)
 }
+
 
 test.describe('TC-PZ-002 create a goods receipt', () => {
   let warehouseId: string
@@ -157,6 +192,7 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
   let productBId: string
   let variantAId: string
   let variantBId: string
+  let productWithoutDefaultId: string
 
   test.beforeAll(async ({ playwright }) => {
     const admin = await playwright.request.newContext({ baseURL: process.env.BASE_URL || 'http://localhost:3000' })
@@ -169,6 +205,8 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
       variantAId = productA.variantId
       productBId = productB.productId
       variantBId = productB.variantId
+      productWithoutDefaultId = await createBareProduct(admin, 'nodefault')
+      await createVariant(admin, productWithoutDefaultId, `PZQA-nodefault-${RUN}-ALT`, false)
     } finally {
       await admin.dispose()
     }
@@ -264,6 +302,23 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
     expect(sequential.status(), await sequential.text()).toBe(400)
   })
 
+  test('refuses a product that cannot be resolved to a single default variant', async ({ context }) => {
+    await login(context.request, ADMIN.email, ADMIN.password)
+    const response = await context.request.post(API, {
+      data: {
+        documentNumber: `PZ/${RUN}/8`,
+        documentDate: yesterday(),
+        supplierName: 'Hurtownia Kowalski',
+        warehouseId,
+        lines: [{ catalogProductId: productWithoutDefaultId, quantity: '1' }],
+      },
+      failOnStatusCode: false,
+    })
+    expect(response.status(), await response.text()).toBe(400)
+    // Refused rather than filed against whichever variant happened to come back first.
+    expect(((await response.json()) as { fields?: Record<string, string> }).fields?.lines).toBeTruthy()
+  })
+
   test('refuses a future document date, a non-positive quantity and a receipt with no lines', async ({ context }) => {
     await login(context.request, ADMIN.email, ADMIN.password)
     const base = {
@@ -307,51 +362,73 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
 
 
   /**
-   * The whole create flow without a mouse, ending in a real document. It also removes a
-   * line before saving, which is the other thing only the screen can show.
+   * The whole create flow without a mouse, ending in a real document. Focus is taken once,
+   * on the first field, and every move after that is Tab, Shift+Tab, typing or Enter — so a
+   * control the tab order cannot reach fails the test. It also adds and removes lines, which
+   * is the other thing only the screen can show.
    */
   test('completes a multi-line create from the keyboard alone', async ({ context, page }) => {
-    test.setTimeout(120_000)
+    test.setTimeout(180_000)
     await login(context.request, ADMIN.email, ADMIN.password)
     const documentNumber = `PZ/${RUN}/7`
 
     await page.goto(`${INDEX_PATH}/create`)
-    await page.getByPlaceholder('PZ/1/2026').focus()
+    const documentNumberField = page.getByPlaceholder('PZ/1/2026')
+    await documentNumberField.focus()
+    await expect(documentNumberField).toBeFocused()
     await page.keyboard.type(documentNumber, { delay: 10 })
 
-    await page.keyboard.press('Tab')
+    await tabUntilFocused(page, page.getByRole('button', { name: /Pick a date|Wybierz datę/i }), { limit: 1 })
     await pickTodayByKeyboard(page)
 
-    await page.getByPlaceholder(/Who sent the delivery|Kto przysłał dostawę/i).focus()
+    // Committing the date closes a popover, and focus lands wherever the popover left it
+    // rather than back on the trigger, so the walk to Supplier is given room.
+    const supplierField = page.getByPlaceholder(/Who sent the delivery|Kto przysłał dostawę/i)
+    await tabUntilFocused(page, supplierField, { limit: 60 })
     await page.keyboard.type('Hurtownia Kowalski', { delay: 10 })
 
-    await page.keyboard.press('Tab')
+    await tabUntilFocused(page, page.getByRole('combobox', { name: /Search for a warehouse|Wyszukaj magazyn/i }), { limit: 1 })
     await chooseOptionByKeyboard(page, new RegExp(`PZ QA warehouse ${RUN}`), `PZ QA warehouse ${RUN}`)
 
-    await page.getByRole('combobox', { name: /Product, position 1|Produkt, pozycja 1/i }).focus()
+    await tabUntilFocused(page, page.getByRole('combobox', { name: /Product, position 1|Produkt, pozycja 1/i }), { limit: 1 })
     await chooseOptionByKeyboard(page, new RegExp(`PZ QA product a ${RUN}`), `PZ QA product a ${RUN}`)
-    await page.keyboard.press('Tab')
+    await tabUntilFocused(page, page.getByRole('textbox', { name: /Quantity, position 1|Ilość, pozycja 1/i }), { limit: 1 })
     await page.keyboard.type('2.5')
 
-    // A second line, added and then removed from the keyboard.
-    await page.getByRole('button', { name: /Add line|Dodaj pozycję/i }).press('Enter')
-    await page.getByRole('combobox', { name: /Product, position 2|Produkt, pozycja 2/i }).focus()
+    // Unit, Remove, then Add line: three presses from the quantity field.
+    const addLine = page.getByRole('button', { name: /Add line|Dodaj pozycję/i })
+    await tabUntilFocused(page, addLine, { limit: 3 })
+    await page.keyboard.press('Enter')
+
+    // The new row is inserted above the Add button, so its controls are behind us.
+    const secondProduct = page.getByRole('combobox', { name: /Product, position 2|Produkt, pozycja 2/i })
+    await tabUntilFocused(page, secondProduct, { shift: true, limit: 4 })
     await chooseOptionByKeyboard(page, new RegExp(`PZ QA product b ${RUN}`), `PZ QA product b ${RUN}`)
-    await page.keyboard.press('Tab')
+    await tabUntilFocused(page, page.getByRole('textbox', { name: /Quantity, position 2|Ilość, pozycja 2/i }), { limit: 1 })
     await page.keyboard.type('4')
 
-    // A third line survives the removal of the second, so line numbers are reassigned by
-    // order rather than left with a hole.
-    await page.getByRole('button', { name: /Add line|Dodaj pozycję/i }).press('Enter')
-    await page.getByRole('combobox', { name: /Product, position 3|Produkt, pozycja 3/i }).focus()
+    // A third line, so removing the second proves the rest are renumbered rather than left
+    // with a hole.
+    await tabUntilFocused(page, addLine, { limit: 3 })
+    await page.keyboard.press('Enter')
+    const thirdProduct = page.getByRole('combobox', { name: /Product, position 3|Produkt, pozycja 3/i })
+    await tabUntilFocused(page, thirdProduct, { shift: true, limit: 4 })
     await chooseOptionByKeyboard(page, new RegExp(`PZ QA product b ${RUN}`), `PZ QA product b ${RUN}`)
-    await page.keyboard.press('Tab')
+    await tabUntilFocused(page, page.getByRole('textbox', { name: /Quantity, position 3|Ilość, pozycja 3/i }), { limit: 1 })
     await page.keyboard.type('1')
 
-    await page.getByRole('button', { name: /Remove position 2|Usuń pozycję 2/i }).press('Enter')
-    await expect(page.getByRole('combobox', { name: /Product, position 3|Produkt, pozycja 3/i })).toHaveCount(0)
+    // Back up to the second line's remove button and press it.
+    const removeSecond = page.getByRole('button', { name: /Remove position 2|Usuń pozycję 2/i })
+    await tabUntilFocused(page, removeSecond, { shift: true, limit: 8 })
+    await page.keyboard.press('Enter')
+    await expect(thirdProduct).toHaveCount(0)
 
-    await page.getByRole('button', { name: /Save goods receipt|Zapisz przyjęcie/i }).first().press('Enter')
+    // Removing the focused control drops focus to the document, so the walk to Save starts
+    // at the top of the page and crosses the whole sidebar — long, but reachable without a
+    // mouse, which is what the acceptance criterion asks for.
+    const save = page.getByRole('button', { name: /Save goods receipt|Zapisz przyjęcie/i }).first()
+    await tabUntilFocused(page, save, { limit: 200 })
+    await page.keyboard.press('Enter')
 
     await page.waitForURL(new RegExp(`${INDEX_PATH}(\\?|$)`))
     await expect(page.getByText(documentNumber)).toBeVisible()

@@ -4,12 +4,13 @@ import {
   registerCommand,
   type CommandHandler,
   type CommandRuntimeContext,
+  type CommandUndoLogEntry,
 } from '@open-mercato/shared/lib/commands'
 import { runCrudCommandWrite } from '@open-mercato/shared/lib/commands/runCrudCommandWrite'
 import { emitCrudUndoSideEffects } from '@open-mercato/shared/lib/commands/helpers'
 import { makeCreateRedo } from '@open-mercato/shared/lib/commands/redo'
 import { extractUndoPayload, type UndoPayload } from '@open-mercato/shared/lib/commands/undo'
-import { CrudHttpError, badRequest, isUniqueViolation } from '@open-mercato/shared/lib/crud/errors'
+import { CrudHttpError, badRequest, conflict, isCrudHttpError, isUniqueViolation } from '@open-mercato/shared/lib/crud/errors'
 import type { CrudEmitContext, CrudEventsConfig, CrudIndexerConfig } from '@open-mercato/shared/lib/crud/types'
 import type { DataEngine } from '@open-mercato/shared/lib/data/engine'
 import type { QueryEngine } from '@open-mercato/shared/lib/query/types'
@@ -163,7 +164,7 @@ export async function requireWarehouse(
 }
 
 type ProductRow = { id: string; title: string | null; sku: string | null; default_unit: string | null }
-type VariantRow = { id: string; product_id: string; sku: string | null }
+type VariantRow = { id: string; product_id: string; sku: string | null; is_default: boolean | null }
 
 export type ResolvedCatalogLine = {
   catalogVariantId: string
@@ -201,8 +202,11 @@ export async function resolveCatalogLines(
     queryEngine.query<VariantRow>(E.catalog.catalog_product_variant, {
       tenantId: scope.tenantId,
       organizationId: scope.organizationId,
-      fields: ['id', 'product_id', 'sku'],
-      filters: { product_id: { $in: unique }, is_default: true },
+      // `is_default` is projected as well as filtered: the engine resolves a filter
+      // against the selected projection, so filtering on a column it was not asked to read
+      // silently returns every variant.
+      fields: ['id', 'product_id', 'sku', 'is_default'],
+      filters: { product_id: { $in: unique }, is_default: { $eq: true } },
       // Room for more than one default per product so an ambiguous catalog is detected
       // rather than silently truncated to whichever row the page happened to include.
       page: { page: 1, pageSize: Math.min(unique.length * 4, 1000) },
@@ -318,6 +322,22 @@ export function serializeGoodsReceipt(
   }
 }
 
+
+/**
+ * Reads the aggregate back for a snapshot instead of trusting an in-memory collection.
+ * A redo restores the header through a shared single-row helper, which hands back an
+ * entity whose `lines` collection was never initialised — reading it there would throw
+ * after the restore had already committed and emitted its effects.
+ */
+async function snapshotAggregate(
+  ctx: CommandRuntimeContext,
+  receipt: GoodsReceipt,
+): Promise<SerializedGoodsReceipt> {
+  const em = (ctx.container.resolve('em') as EntityManager).fork()
+  const lines = await em.find(GoodsReceiptLine, { goodsReceipt: receipt.id } as FilterQuery<GoodsReceiptLine>)
+  return serializeGoodsReceipt(receipt, lines)
+}
+
 async function parseInput(raw: unknown, translate: TranslateFn): Promise<GoodsReceiptWriteInput> {
   const parsed = parseGoodsReceiptWriteInput(raw, translate, { today: utcToday() })
   if (!parsed.ok) throw goodsReceiptFieldError(parsed.message, parsed.fields)
@@ -378,6 +398,69 @@ function headerSeedFromSnapshot(snapshot: SerializedGoodsReceipt): Record<string
     createdAt: new Date(snapshot.createdAt),
     updatedAt: new Date(snapshot.updatedAt),
     deletedAt: null,
+  }
+}
+
+const restoreCreatedGoodsReceipt = makeCreateRedo<GoodsReceipt, SerializedGoodsReceipt, Record<string, unknown>, GoodsReceipt>({
+  entityClass: GoodsReceipt,
+  getSnapshotId: (snapshot) => snapshot.id,
+  seedFromSnapshot: headerSeedFromSnapshot,
+  buildResult: (entity) => entity,
+  events: goodsReceiptCrudEvents,
+  indexer: goodsReceiptCrudIndexer,
+  transaction: true,
+  afterRestore: async ({ em, entity, snapshot }) => {
+    if (!snapshot.lines.length) return
+    const existing = await em.find(GoodsReceiptLine, {
+      goodsReceipt: entity.id,
+    } as FilterQuery<GoodsReceiptLine>)
+    const present = new Set(existing.map((line) => String(line.id)))
+    for (const line of snapshot.lines) {
+      if (present.has(line.id)) continue
+      em.persist(
+        em.create(GoodsReceiptLine, {
+          id: line.id,
+          goodsReceipt: entity,
+          tenantId: snapshot.tenantId,
+          organizationId: snapshot.organizationId,
+          lineNumber: line.lineNumber,
+          catalogVariantId: line.catalogVariantId,
+          catalogProductId: line.catalogProductId,
+          catalogSnapshot: line.catalogSnapshot,
+          quantity: line.quantity,
+          unit: line.unit,
+          uomSnapshot: line.uomSnapshot,
+          createdAt: new Date(snapshot.createdAt),
+          updatedAt: new Date(snapshot.updatedAt),
+        }),
+      )
+    }
+  },
+})
+
+/**
+ * A document number freed by the undo may legitimately have been taken by someone else in
+ * the meantime. The shared helper reports that as an untranslated developer message, which
+ * is not what the person clicking redo should read.
+ */
+async function restoreGoodsReceipt(args: {
+  input: Record<string, unknown>
+  ctx: CommandRuntimeContext
+  logEntry: CommandUndoLogEntry
+}): Promise<GoodsReceipt> {
+  try {
+    return await restoreCreatedGoodsReceipt(args)
+  } catch (error) {
+    if (isUniqueViolation(error) || (isCrudHttpError(error) && error.status === 409)) {
+      const { translate } = await resolveTranslations()
+      throw conflict(
+        translate(
+          'pz.goodsReceipts.errors.redoDocumentNumberTaken',
+          'This Document Number has been used by another goods receipt since, so this one cannot be restored.',
+        ),
+      )
+    }
+    throw error
   }
 }
 
@@ -466,11 +549,10 @@ const createGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
       throw error
     }
 
-    receipt.lines.set(lines)
     return receipt
   },
-  captureAfter: (_input, result) => serializeGoodsReceipt(result, result.lines.getItems()),
-  buildLog: async ({ result }) => {
+  captureAfter: (_input, result, ctx) => snapshotAggregate(ctx, result),
+  buildLog: async ({ result, ctx }) => {
     const { translate } = await resolveTranslations()
     return {
       actionLabel: translate('pz.audit.goodsReceipts.create', 'Create goods receipt'),
@@ -478,7 +560,7 @@ const createGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
       resourceId: String(result.id),
       tenantId: result.tenantId,
       organizationId: result.organizationId,
-      snapshotAfter: serializeGoodsReceipt(result, result.lines.getItems()),
+      snapshotAfter: await snapshotAggregate(ctx, result),
     }
   },
   async undo({ logEntry, ctx }) {
@@ -526,42 +608,7 @@ const createGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
    * `execute`, which would mint a new goods receipt and leave the first one's lines
    * pointing at a soft-deleted header.
    */
-  redo: makeCreateRedo<GoodsReceipt, SerializedGoodsReceipt, Record<string, unknown>, GoodsReceipt>({
-    entityClass: GoodsReceipt,
-    getSnapshotId: (snapshot) => snapshot.id,
-    seedFromSnapshot: headerSeedFromSnapshot,
-    buildResult: (entity) => entity,
-    events: goodsReceiptCrudEvents,
-    indexer: goodsReceiptCrudIndexer,
-    transaction: true,
-    afterRestore: async ({ em, entity, snapshot }) => {
-      if (!snapshot.lines.length) return
-      const existing = await em.find(GoodsReceiptLine, {
-        goodsReceipt: entity.id,
-      } as FilterQuery<GoodsReceiptLine>)
-      const present = new Set(existing.map((line) => String(line.id)))
-      for (const line of snapshot.lines) {
-        if (present.has(line.id)) continue
-        em.persist(
-          em.create(GoodsReceiptLine, {
-            id: line.id,
-            goodsReceipt: entity,
-            tenantId: snapshot.tenantId,
-            organizationId: snapshot.organizationId,
-            lineNumber: line.lineNumber,
-            catalogVariantId: line.catalogVariantId,
-            catalogProductId: line.catalogProductId,
-            catalogSnapshot: line.catalogSnapshot,
-            quantity: line.quantity,
-            unit: line.unit,
-            uomSnapshot: line.uomSnapshot,
-            createdAt: new Date(snapshot.createdAt),
-            updatedAt: new Date(snapshot.updatedAt),
-          }),
-        )
-      }
-    },
-  }),
+  redo: (args) => restoreGoodsReceipt(args),
 }
 
 registerCommand(createGoodsReceiptCommand)

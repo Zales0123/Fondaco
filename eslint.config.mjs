@@ -8,6 +8,9 @@ const ignores = [
   '.next/**',
   '.mercato/**',
   '.ai/framework-context/**',
+  // Playwright writes its report and traces here; running the integration suite locally
+  // would otherwise turn `yarn lint` red on bundled third-party output.
+  '.ai/qa/test-results/**',
   'dist/**',
   'out/**',
   'build/**',
