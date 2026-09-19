@@ -350,6 +350,12 @@ export function serializeGoodsReceipt(
  */
 const capturedAggregates = new WeakMap<GoodsReceipt, SerializedGoodsReceipt>()
 
+/**
+ * Redo results that changed nothing. They must not produce an undoable log entry: undoing
+ * work that never happened is how one actor's edit gets overwritten by another's no-op.
+ */
+const redoNoOps = new WeakSet<GoodsReceipt>()
+
 async function snapshotAggregate(
   ctx: CommandRuntimeContext,
   receipt: GoodsReceipt,
@@ -904,6 +910,10 @@ async function redoAggregateState(
           // still mint an undoable delete log — undoing which would restore THEIR deletion.
           if (!options.deleted && receipt.deletedAt == null && aggregateMatchesSnapshot(receipt, lines, target)) {
             alreadyApplied = true
+            // Taken under the lock even on this path, so nothing reloads the lines after
+            // the transaction and picks up a later actor's edit.
+            capturedAggregates.set(receipt, serializeGoodsReceipt(receipt, lines))
+            redoNoOps.add(receipt)
             return
           }
 
@@ -1059,6 +1069,9 @@ const updateGoodsReceiptCommand: CommandHandler<Record<string, unknown>, GoodsRe
   },
   captureAfter: (_input, result, ctx) => snapshotAggregate(ctx, result),
   buildLog: async ({ result, snapshots }) => {
+    // A redo that found the document already in its target state changed nothing, and an
+    // undoable log for it would let a later undo overwrite whatever came after.
+    if (redoNoOps.has(result)) return { skipLog: true }
     const { translate } = await resolveTranslations()
     const before = (snapshots.before as SerializedGoodsReceipt | undefined) ?? null
     const after = snapshots.after as SerializedGoodsReceipt
