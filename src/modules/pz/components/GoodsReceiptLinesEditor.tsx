@@ -121,16 +121,26 @@ export function GoodsReceiptLinesEditor({ value, onChange, error, disabled }: Go
                 <TableRow key={line.key}>
                   <TableCell>{position}</TableCell>
                   <TableCell>
-                    <ComboboxInput
-                      value={line.catalogProductId}
-                      onChange={(next) => handleProductChange(line.key, next)}
-                      placeholder={t('pz.goodsReceipts.form.lines.product.placeholder')}
-                      loadSuggestions={loadProducts}
-                      resolveLabel={resolveProductLabel}
-                      allowCustomValues={false}
-                      clearable={false}
-                      disabled={disabled}
-                    />
+                    {/*
+                      `ComboboxInput` takes no `aria-label`, and a shared placeholder cannot
+                      tell two lines apart for a screen reader. A wrapping label names the
+                      control it contains, so each row announces its own position.
+                    */}
+                    <label>
+                      <span className="sr-only">
+                        {t('pz.goodsReceipts.form.lines.product.label', undefined, { position })}
+                      </span>
+                      <ComboboxInput
+                        value={line.catalogProductId}
+                        onChange={(next) => handleProductChange(line.key, next)}
+                        placeholder={t('pz.goodsReceipts.form.lines.product.placeholder')}
+                        loadSuggestions={loadProducts}
+                        resolveLabel={resolveProductLabel}
+                        allowCustomValues={false}
+                        clearable={false}
+                        disabled={disabled}
+                      />
+                    </label>
                   </TableCell>
                   <TableCell>
                     <Input

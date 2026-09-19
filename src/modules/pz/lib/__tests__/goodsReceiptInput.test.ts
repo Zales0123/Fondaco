@@ -51,6 +51,11 @@ describe('normalizeQuantity', () => {
   it('rejects more precision than the column keeps rather than rounding it away silently', () => {
     expect(normalizeQuantity('1.00001')).toBeNull()
   })
+
+  it('rejects a value wider than the column, instead of letting Postgres refuse it', () => {
+    expect(normalizeQuantity('9'.repeat(15))).toBeNull()
+    expect(normalizeQuantity(`0000${'9'.repeat(14)}`)).toBe(`${'9'.repeat(14)}.0000`)
+  })
 })
 
 describe('isCalendarDay', () => {
@@ -85,6 +90,20 @@ describe('parseGoodsReceiptWriteInput', () => {
   it('accepts today and any past day', () => {
     expect(parse(validPayload({ documentDate: TODAY })).ok).toBe(true)
     expect(parse(validPayload({ documentDate: '2019-01-01' })).ok).toBe(true)
+  })
+
+  it('rejects a document date that only starts like one', () => {
+    const result = parse(validPayload({ documentDate: '2026-09-18junk' }))
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(Object.keys(result.fields)).toEqual(['documentDate'])
+  })
+
+  it('rejects a unit longer than the column instead of truncating what the user typed', () => {
+    const result = parse(validPayload({ lines: [{ catalogProductId: PRODUCT, quantity: '1', unit: 'x'.repeat(51) }] }))
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.fields.lines).toBeTruthy()
   })
 
   it('rejects a future document date', () => {

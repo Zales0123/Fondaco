@@ -42,7 +42,7 @@ async function createWarehouse(request: APIRequestContext): Promise<string> {
   return body.id as string
 }
 
-async function createProduct(request: APIRequestContext, suffix: string): Promise<string> {
+async function createProduct(request: APIRequestContext, suffix: string): Promise<{ productId: string; variantId: string }> {
   const productResponse = await request.post('/api/catalog/products', {
     data: { title: `PZ QA product ${suffix} ${RUN}`, sku: `PZQA-${suffix}-${RUN}`, defaultUnit: 'pc' },
     failOnStatusCode: false,
@@ -56,8 +56,10 @@ async function createProduct(request: APIRequestContext, suffix: string): Promis
     failOnStatusCode: false,
   })
   expect(variantResponse.status(), `variant -> ${variantResponse.status()}: ${await variantResponse.text()}`).toBeLessThan(400)
+  const variant = (await variantResponse.json()) as Created
+  expect(variant.id, 'variant id missing').toBeTruthy()
 
-  return product.id as string
+  return { productId: product.id as string, variantId: variant.id as string }
 }
 
 function yesterday(): string {
@@ -82,18 +84,91 @@ async function chooseOption(page: Page, field: Locator, query: string, optionNam
   await option.click()
 }
 
+type GoodsReceiptRow = {
+  id: string
+  documentNumber: string
+  documentDate: string | null
+  supplierName: string
+  warehouseId: string
+  status: string
+  lineCount: number
+  lines: Array<{
+    id: string
+    lineNumber: number
+    catalogProductId: string
+    catalogVariantId: string
+    catalogSnapshot: { name: string; sku: string | null } | null
+    quantity: string
+    unit: string | null
+    uomSnapshot: { code: string | null; productDefaultUnit: string | null } | null
+  }> | null
+}
+
+/** Reads one aggregate back through the public list endpoint, lines included. */
+async function readGoodsReceipt(request: APIRequestContext, id: string): Promise<GoodsReceiptRow> {
+  const response = await request.get(`${API}?ids=${encodeURIComponent(id)}&pageSize=1`)
+  expect(response.status(), `read -> ${response.status()}: ${await response.text()}`).toBe(200)
+  const body = (await response.json()) as { items: GoodsReceiptRow[] }
+  const row = body.items[0]
+  expect(row, `goods receipt ${id} is missing from the index`).toBeTruthy()
+  return row
+}
+
+/**
+ * Walks every page rather than sampling the first one: "the refused number left nothing
+ * behind" must not depend on how many documents the environment already holds.
+ */
+async function documentNumberExists(request: APIRequestContext, documentNumber: string): Promise<boolean> {
+  for (let page = 1; page <= 200; page += 1) {
+    const response = await request.get(`${API}?page=${page}&pageSize=100`)
+    expect(response.status()).toBe(200)
+    const body = (await response.json()) as { items: GoodsReceiptRow[]; totalPages?: number }
+    if (body.items.some((item) => item.documentNumber === documentNumber)) return true
+    if (body.items.length === 0 || page >= (body.totalPages ?? 1)) return false
+  }
+  throw new Error('[internal] goods receipt index paging did not terminate')
+}
+
+/**
+ * Fills a searchable picker without touching the mouse: type, wait for the option to be
+ * offered, then take it with the keyboard. Typing key by key is what the picker listens
+ * for, and waiting for the option keeps the interaction deterministic without sleeping.
+ */
+async function chooseOptionByKeyboard(page: Page, optionName: RegExp, query: string): Promise<void> {
+  await page.keyboard.type(query, { delay: 15 })
+  await expect(page.getByRole('option', { name: optionName }).first()).toBeVisible({ timeout: 20_000 })
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('Enter')
+}
+
+/** Opens the date picker from the keyboard and commits today, which is never a future day. */
+async function pickTodayByKeyboard(page: Page): Promise<void> {
+  await page.keyboard.press('Enter')
+  await expect(page.getByRole('button', { name: /^Today,/ })).toBeFocused()
+  await page.keyboard.press('Enter')
+  const apply = page.getByRole('button', { name: /^(Apply|Zastosuj)$/ })
+  await expect(apply).toBeVisible()
+  await apply.press('Enter')
+}
+
 test.describe('TC-PZ-002 create a goods receipt', () => {
   let warehouseId: string
   let productAId: string
   let productBId: string
+  let variantAId: string
+  let variantBId: string
 
   test.beforeAll(async ({ playwright }) => {
     const admin = await playwright.request.newContext({ baseURL: process.env.BASE_URL || 'http://localhost:3000' })
     try {
       await login(admin, ADMIN.email, ADMIN.password)
       warehouseId = await createWarehouse(admin)
-      productAId = await createProduct(admin, 'a')
-      productBId = await createProduct(admin, 'b')
+      const productA = await createProduct(admin, 'a')
+      const productB = await createProduct(admin, 'b')
+      productAId = productA.productId
+      variantAId = productA.variantId
+      productBId = productB.productId
+      variantBId = productB.variantId
     } finally {
       await admin.dispose()
     }
@@ -122,17 +197,36 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
     const createdBody = (await created.json()) as Created
     expect(createdBody.id).toBeTruthy()
 
-    const list = await context.request.get(`${API}?pageSize=50`)
-    expect(list.status()).toBe(200)
-    const body = (await list.json()) as {
-      items: Array<{ id: string; documentNumber: string; status: string; lineCount: number; supplierName: string }>
-    }
-    const row = body.items.find((item) => item.id === createdBody.id)
-    expect(row, 'the new goods receipt is missing from the index').toBeTruthy()
-    expect(row?.documentNumber).toBe(documentNumber)
-    expect(row?.status).toBe('draft')
-    expect(row?.supplierName).toBe('Hurtownia Kowalski')
-    expect(row?.lineCount).toBe(3)
+    const row = await readGoodsReceipt(context.request, createdBody.id as string)
+    expect(row.documentNumber).toBe(documentNumber)
+    expect(row.status).toBe('draft')
+    expect(row.supplierName).toBe('Hurtownia Kowalski')
+    expect(row.documentDate).toBe(yesterday())
+    expect(row.warehouseId).toBe(warehouseId)
+    expect(row.lineCount).toBe(3)
+
+    // Every stored line field, not just how many there are: a wrong variant, a lost
+    // snapshot or a silently reordered position all have to fail this.
+    expect(row.lines?.map((line) => line.lineNumber)).toEqual([1, 2, 3])
+    expect(row.lines?.map((line) => line.quantity)).toEqual(['2.5000', '1.0000', '3.0000'])
+    expect(row.lines?.map((line) => line.catalogProductId)).toEqual([productAId, productBId, productAId])
+    expect(row.lines?.map((line) => line.unit)).toEqual(['pc', 'kg', 'pc'])
+    expect(row.lines?.map((line) => line.uomSnapshot)).toEqual([
+      { code: 'pc', productDefaultUnit: 'pc' },
+      { code: 'kg', productDefaultUnit: 'pc' },
+      { code: 'pc', productDefaultUnit: 'pc' },
+    ])
+    expect(row.lines?.map((line) => line.catalogVariantId)).toEqual([variantAId, variantBId, variantAId])
+    expect(row.lines?.map((line) => line.catalogSnapshot?.name)).toEqual([
+      `PZ QA product a ${RUN}`,
+      `PZ QA product b ${RUN}`,
+      `PZ QA product a ${RUN}`,
+    ])
+    expect(row.lines?.map((line) => line.catalogSnapshot?.sku)).toEqual([
+      `PZQA-a-${RUN}-V1`,
+      `PZQA-b-${RUN}-V1`,
+      `PZQA-a-${RUN}-V1`,
+    ])
   })
 
   test('refuses a document number already used in the organization, ignoring case', async ({ context }) => {
@@ -145,17 +239,29 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
       lines: [{ catalogProductId: productAId, quantity: '1' }],
     }
 
-    const first = await context.request.post(API, { data: { ...payload, documentNumber }, failOnStatusCode: false })
-    expect(first.status(), await first.text()).toBe(201)
+    // Fired together so the read-before-write cannot be what refuses the second one: the
+    // partial unique index is the guard, and a sequential test would pass without it.
+    const [first, second] = await Promise.all([
+      context.request.post(API, { data: { ...payload, documentNumber }, failOnStatusCode: false }),
+      context.request.post(API, {
+        // Lower-cased and padded: the same document, so the same refusal.
+        data: { ...payload, documentNumber: `  ${documentNumber.toLowerCase()}  ` },
+        failOnStatusCode: false,
+      }),
+    ])
 
-    // Lower-cased and padded: the same document, so the same refusal.
-    const duplicate = await context.request.post(API, {
-      data: { ...payload, documentNumber: `  ${documentNumber.toLowerCase()}  ` },
+    const statuses = [first.status(), second.status()].sort((a, b) => a - b)
+    expect(statuses, `${first.status()} / ${second.status()}`).toEqual([201, 400])
+    const rejected = first.status() === 400 ? first : second
+    const body = (await rejected.json()) as { fields?: Record<string, string> }
+    expect(body.fields?.documentNumber, 'the conflict must be reported on the Document Number field').toBeTruthy()
+
+    // And a plain sequential duplicate is refused the same way.
+    const sequential = await context.request.post(API, {
+      data: { ...payload, documentNumber: documentNumber.toUpperCase() },
       failOnStatusCode: false,
     })
-    expect(duplicate.status(), await duplicate.text()).toBe(400)
-    const body = (await duplicate.json()) as { fields?: Record<string, string> }
-    expect(body.fields?.documentNumber, 'the conflict must be reported on the Document Number field').toBeTruthy()
+    expect(sequential.status(), await sequential.text()).toBe(400)
   })
 
   test('refuses a future document date, a non-positive quantity and a receipt with no lines', async ({ context }) => {
@@ -189,10 +295,77 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
     expect(noLines.status(), await noLines.text()).toBe(400)
     expect(((await noLines.json()) as { fields?: Record<string, string> }).fields?.lines).toBeTruthy()
 
-    // A failed save must leave nothing behind, so the refused number is still free.
+    // A failed save must leave nothing behind, so the refused number is still free — proven
+    // both by its absence from the whole index and by a later create taking it.
+    expect(await documentNumberExists(context.request, noLinesNumber)).toBe(false)
+    const reused = await context.request.post(API, {
+      data: { ...base, documentNumber: noLinesNumber },
+      failOnStatusCode: false,
+    })
+    expect(reused.status(), await reused.text()).toBe(201)
+  })
+
+
+  /**
+   * The whole create flow without a mouse, ending in a real document. It also removes a
+   * line before saving, which is the other thing only the screen can show.
+   */
+  test('completes a multi-line create from the keyboard alone', async ({ context, page }) => {
+    test.setTimeout(120_000)
+    await login(context.request, ADMIN.email, ADMIN.password)
+    const documentNumber = `PZ/${RUN}/7`
+
+    await page.goto(`${INDEX_PATH}/create`)
+    await page.getByPlaceholder('PZ/1/2026').focus()
+    await page.keyboard.type(documentNumber, { delay: 10 })
+
+    await page.keyboard.press('Tab')
+    await pickTodayByKeyboard(page)
+
+    await page.getByPlaceholder(/Who sent the delivery|Kto przysłał dostawę/i).focus()
+    await page.keyboard.type('Hurtownia Kowalski', { delay: 10 })
+
+    await page.keyboard.press('Tab')
+    await chooseOptionByKeyboard(page, new RegExp(`PZ QA warehouse ${RUN}`), `PZ QA warehouse ${RUN}`)
+
+    await page.getByRole('combobox', { name: /Product, position 1|Produkt, pozycja 1/i }).focus()
+    await chooseOptionByKeyboard(page, new RegExp(`PZ QA product a ${RUN}`), `PZ QA product a ${RUN}`)
+    await page.keyboard.press('Tab')
+    await page.keyboard.type('2.5')
+
+    // A second line, added and then removed from the keyboard.
+    await page.getByRole('button', { name: /Add line|Dodaj pozycję/i }).press('Enter')
+    await page.getByRole('combobox', { name: /Product, position 2|Produkt, pozycja 2/i }).focus()
+    await chooseOptionByKeyboard(page, new RegExp(`PZ QA product b ${RUN}`), `PZ QA product b ${RUN}`)
+    await page.keyboard.press('Tab')
+    await page.keyboard.type('4')
+
+    // A third line survives the removal of the second, so line numbers are reassigned by
+    // order rather than left with a hole.
+    await page.getByRole('button', { name: /Add line|Dodaj pozycję/i }).press('Enter')
+    await page.getByRole('combobox', { name: /Product, position 3|Produkt, pozycja 3/i }).focus()
+    await chooseOptionByKeyboard(page, new RegExp(`PZ QA product b ${RUN}`), `PZ QA product b ${RUN}`)
+    await page.keyboard.press('Tab')
+    await page.keyboard.type('1')
+
+    await page.getByRole('button', { name: /Remove position 2|Usuń pozycję 2/i }).press('Enter')
+    await expect(page.getByRole('combobox', { name: /Product, position 3|Produkt, pozycja 3/i })).toHaveCount(0)
+
+    await page.getByRole('button', { name: /Save goods receipt|Zapisz przyjęcie/i }).first().press('Enter')
+
+    await page.waitForURL(new RegExp(`${INDEX_PATH}(\\?|$)`))
+    await expect(page.getByText(documentNumber)).toBeVisible()
+
     const list = await context.request.get(`${API}?pageSize=100`)
-    const body = (await list.json()) as { items: Array<{ documentNumber: string }> }
-    expect(body.items.some((item) => item.documentNumber === noLinesNumber)).toBe(false)
+    const body = (await list.json()) as { items: GoodsReceiptRow[] }
+    const created = body.items.find((item) => item.documentNumber === documentNumber)
+    expect(created, 'the keyboard-created goods receipt is missing from the index').toBeTruthy()
+    const row = await readGoodsReceipt(context.request, created!.id)
+    expect(row.status).toBe('draft')
+    expect(row.lineCount).toBe(2)
+    expect(row.lines?.map((line) => line.lineNumber)).toEqual([1, 2])
+    expect(row.lines?.map((line) => line.quantity)).toEqual(['2.5000', '1.0000'])
+    expect(row.lines?.map((line) => line.catalogProductId)).toEqual([productAId, productBId])
   })
 
   /**
@@ -222,7 +395,8 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
     const warehouseField = page.getByRole('combobox', { name: /Search for a warehouse|Wyszukaj magazyn/i })
     await chooseOption(page, warehouseField, `PZ QA warehouse ${RUN}`, new RegExp(`PZ QA warehouse ${RUN}`))
 
-    const productField = page.getByRole('combobox', { name: /Search for a product|Wyszukaj produkt/i }).first()
+    // The picker is named by its own position, so two lines never share an accessible name.
+    const productField = page.getByRole('combobox', { name: /Product, position 1|Produkt, pozycja 1/i })
     await chooseOption(page, productField, `PZ QA product a ${RUN}`, new RegExp(`PZ QA product a ${RUN}`))
     await page.getByRole('textbox', { name: /Quantity, position 1|Ilość, pozycja 1/i }).fill('4')
 
@@ -237,8 +411,6 @@ test.describe('TC-PZ-002 create a goods receipt', () => {
     await expect(documentNumberField).toHaveValue(documentNumber)
     await expect(supplierField).toHaveValue('Hurtownia Kowalski')
 
-    const list = await context.request.get(`${API}?pageSize=100`)
-    const body = (await list.json()) as { items: Array<{ documentNumber: string }> }
-    expect(body.items.some((item) => item.documentNumber === documentNumber)).toBe(false)
+    expect(await documentNumberExists(context.request, documentNumber)).toBe(false)
   })
 })

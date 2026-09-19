@@ -3,7 +3,12 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { makeCrudRoute, type CrudCtx } from '@open-mercato/shared/lib/crud/factory'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { E } from '@/.mercato/generated/entities.ids.generated'
-import { GoodsReceipt, type GoodsReceiptWarehouseSnapshot } from '../../data/entities'
+import {
+  GoodsReceipt,
+  type GoodsReceiptCatalogSnapshot,
+  type GoodsReceiptUomSnapshot,
+  type GoodsReceiptWarehouseSnapshot,
+} from '../../data/entities'
 import {
   goodsReceiptListSchema,
   goodsReceiptWriteBodySchema,
@@ -11,7 +16,9 @@ import {
 } from '../../data/validators'
 import { createPzCrudOpenApi, createPagedListResponseSchema } from '../openapi'
 import {
+  toGoodsReceiptLineItem,
   toGoodsReceiptListItem,
+  type GoodsReceiptLineItem,
   type GoodsReceiptListItem,
   type GoodsReceiptListRow,
 } from '../../lib/goodsReceiptListItem'
@@ -52,7 +59,23 @@ type PzReadDatabase = {
     goods_receipt_id: string
     tenant_id: string
     organization_id: string
+    line_number: number
+    catalog_product_id: string
+    catalog_variant_id: string
+    catalog_snapshot: GoodsReceiptCatalogSnapshot | null
+    quantity: string
+    unit: string | null
+    uom_snapshot: GoodsReceiptUomSnapshot | null
   }
+}
+
+/**
+ * Lines ride along only on a single-record read — the edit and detail screens load exactly
+ * that way. A grid page would pay for rows it never renders, so it gets the count instead.
+ */
+function isSingleRecordRequest(query: GoodsReceiptListQuery): boolean {
+  if (typeof query.id === 'string' && query.id.length > 0) return true
+  return typeof query.ids === 'string' && query.ids.trim().length > 0
 }
 
 /**
@@ -69,9 +92,9 @@ function resolveScopedOrganizationIds(ctx: CrudCtx): string[] | null {
   )
 }
 
-async function decorateLineCounts(
+async function decorateLines(
   payload: { items?: GoodsReceiptListItem[] },
-  ctx: CrudCtx,
+  ctx: CrudCtx & { query: GoodsReceiptListQuery },
 ): Promise<void> {
   const items = Array.isArray(payload.items) ? payload.items : []
   if (items.length === 0) return
@@ -84,17 +107,41 @@ async function decorateLineCounts(
 
   const ids = items.map((item) => item.id)
   const em = ctx.container.resolve<EntityManager>('em')
-  let query = em
-    .getKysely<PzReadDatabase>()
+  const db = em.getKysely<PzReadDatabase>()
+
+  if (isSingleRecordRequest(ctx.query)) {
+    let detail = db
+      .selectFrom('pz_goods_receipt_lines')
+      .selectAll()
+      .where('goods_receipt_id', 'in', ids)
+      .where('tenant_id', '=', tenantId)
+    // The foreign key does not constrain a line's scope to its header's, so the read
+    // repeats the caller's organization predicate instead of trusting the parent id alone.
+    if (scopedOrgIds !== null) detail = detail.where('organization_id', 'in', scopedOrgIds)
+    const rows = await detail.orderBy('line_number', 'asc').execute()
+
+    const byReceipt = new Map<string, GoodsReceiptLineItem[]>()
+    for (const row of rows) {
+      const bucket = byReceipt.get(String(row.goods_receipt_id)) ?? []
+      bucket.push(toGoodsReceiptLineItem(row))
+      byReceipt.set(String(row.goods_receipt_id), bucket)
+    }
+    for (const item of items) {
+      const lines = byReceipt.get(item.id) ?? []
+      item.lines = lines
+      item.lineCount = lines.length
+    }
+    return
+  }
+
+  let counted = db
     .selectFrom('pz_goods_receipt_lines')
     .select('goods_receipt_id')
     .select((eb) => eb.fn.count<string>('id').as('line_count'))
     .where('goods_receipt_id', 'in', ids)
     .where('tenant_id', '=', tenantId)
-  // The foreign key does not constrain a line's scope to its header's, so the count
-  // repeats the caller's organization predicate instead of trusting the parent id alone.
-  if (scopedOrgIds !== null) query = query.where('organization_id', 'in', scopedOrgIds)
-  const rows = await query.groupBy('goods_receipt_id').execute()
+  if (scopedOrgIds !== null) counted = counted.where('organization_id', 'in', scopedOrgIds)
+  const rows = await counted.groupBy('goods_receipt_id').execute()
 
   const counts = new Map(rows.map((row) => [String(row.goods_receipt_id), Number(row.line_count)]))
   for (const item of items) {
@@ -169,7 +216,7 @@ export const { metadata, GET, POST } = makeCrudRoute({
   },
   hooks: {
     afterList: async (payload, ctx) => {
-      await decorateLineCounts(payload as { items?: GoodsReceiptListItem[] }, ctx)
+      await decorateLines(payload as { items?: GoodsReceiptListItem[] }, ctx)
     },
   },
 })
@@ -177,6 +224,17 @@ export const { metadata, GET, POST } = makeCrudRoute({
 const warehouseSnapshotSchema: z.ZodType<GoodsReceiptWarehouseSnapshot | null> = z
   .object({ name: z.string(), code: z.string() })
   .nullable()
+
+const goodsReceiptLineItemSchema = z.object({
+  id: z.string().uuid(),
+  lineNumber: z.number().int(),
+  catalogProductId: z.string().uuid(),
+  catalogVariantId: z.string().uuid(),
+  catalogSnapshot: z.object({ name: z.string(), sku: z.string().nullable() }).nullable(),
+  quantity: z.string(),
+  unit: z.string().nullable(),
+  uomSnapshot: z.object({ code: z.string().nullable(), productDefaultUnit: z.string().nullable() }).nullable(),
+})
 
 const goodsReceiptListItemSchema = z.object({
   id: z.string().uuid(),
@@ -187,6 +245,7 @@ const goodsReceiptListItemSchema = z.object({
   warehouseSnapshot: warehouseSnapshotSchema,
   status: z.enum(['draft', 'confirmed']),
   lineCount: z.number().int(),
+  lines: z.array(goodsReceiptLineItemSchema).nullable(),
   updatedAt: z.string().nullable(),
 })
 

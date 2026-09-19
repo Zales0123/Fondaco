@@ -1,4 +1,20 @@
-import type { GoodsReceiptStatus, GoodsReceiptWarehouseSnapshot } from '../data/entities'
+import type {
+  GoodsReceiptCatalogSnapshot,
+  GoodsReceiptStatus,
+  GoodsReceiptUomSnapshot,
+  GoodsReceiptWarehouseSnapshot,
+} from '../data/entities'
+
+export type GoodsReceiptLineItem = {
+  id: string
+  lineNumber: number
+  catalogProductId: string
+  catalogVariantId: string
+  catalogSnapshot: GoodsReceiptCatalogSnapshot | null
+  quantity: string
+  unit: string | null
+  uomSnapshot: GoodsReceiptUomSnapshot | null
+}
 
 /** Raw projection the query engine returns for a Goods Receipt list row. */
 export type GoodsReceiptListRow = {
@@ -22,6 +38,11 @@ export type GoodsReceiptListItem = {
   warehouseSnapshot: GoodsReceiptWarehouseSnapshot | null
   status: GoodsReceiptStatus
   lineCount: number
+  /**
+   * Only a single-record read carries the lines; a grid page reports `null` rather than an
+   * empty array, so "not loaded" and "has no lines" never look the same.
+   */
+  lines: GoodsReceiptLineItem[] | null
   updatedAt: string | null
 }
 
@@ -56,6 +77,31 @@ function toWarehouseSnapshot(value: unknown): GoodsReceiptWarehouseSnapshot | nu
   return { name: candidate.name, code: candidate.code }
 }
 
+export type GoodsReceiptLineRow = {
+  id: string
+  goods_receipt_id: string
+  line_number: number
+  catalog_product_id: string
+  catalog_variant_id: string
+  catalog_snapshot: GoodsReceiptCatalogSnapshot | null
+  quantity: string | number
+  unit: string | null
+  uom_snapshot: GoodsReceiptUomSnapshot | null
+}
+
+export function toGoodsReceiptLineItem(row: GoodsReceiptLineRow): GoodsReceiptLineItem {
+  return {
+    id: String(row.id),
+    lineNumber: Number(row.line_number),
+    catalogProductId: String(row.catalog_product_id),
+    catalogVariantId: String(row.catalog_variant_id),
+    catalogSnapshot: row.catalog_snapshot ?? null,
+    quantity: String(row.quantity),
+    unit: row.unit ?? null,
+    uomSnapshot: row.uom_snapshot ?? null,
+  }
+}
+
 /**
  * `lineCount` starts at 0 and is filled by the route's `afterList` hook, so the response
  * shape is identical whether or not the aggregate could be resolved.
@@ -70,6 +116,7 @@ export function toGoodsReceiptListItem(row: GoodsReceiptListRow): GoodsReceiptLi
     warehouseSnapshot: toWarehouseSnapshot(row.warehouse_snapshot),
     status: toStatus(row.status),
     lineCount: 0,
+    lines: null,
     updatedAt: toIsoTimestamp(row.updated_at),
   }
 }

@@ -41,8 +41,13 @@ describe('toGoodsReceiptListItem', () => {
       warehouseSnapshot: null,
       status: 'draft',
       lineCount: 0,
+      lines: null,
       updatedAt: '2026-01-31T10:15:00.000Z',
     })
+  })
+
+  it('reports lines as not loaded on a grid row, which is not the same as having none', () => {
+    expect(toGoodsReceiptListItem(row()).lines).toBeNull()
   })
 
   it('projects updatedAt, because dropping it silently disables optimistic locking', () => {

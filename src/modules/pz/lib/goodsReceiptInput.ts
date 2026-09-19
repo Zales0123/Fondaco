@@ -34,6 +34,8 @@ export const SUPPLIER_NAME_MAX_LENGTH = 200
 export const UNIT_MAX_LENGTH = 50
 /** Matches the `numeric(18,4)` column the lines store, which mirrors `sales` line quantities. */
 export const QUANTITY_SCALE = 4
+/** `numeric(18,4)` leaves 14 digits before the point; more is a database error, not a quantity. */
+export const QUANTITY_INTEGER_DIGITS = 14
 
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/
 const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/
@@ -64,8 +66,10 @@ export function normalizeQuantity(value: unknown): string | null {
   if (!raw) return null
   const normalized = raw.replace(',', '.')
   if (!/^\d*\.?\d+$/.test(normalized)) return null
-  const [, fraction = ''] = normalized.split('.')
+  const [integer = '', fraction = ''] = normalized.split('.')
   if (fraction.length > QUANTITY_SCALE) return null
+  // Refused here rather than in Postgres, where it would surface as an opaque write error.
+  if (integer.replace(/^0+/, '').length > QUANTITY_INTEGER_DIGITS) return null
   const parsed = Number(normalized)
   if (!Number.isFinite(parsed) || parsed <= 0) return null
   return parsed.toFixed(QUANTITY_SCALE)
@@ -86,7 +90,9 @@ export function parseGoodsReceiptWriteInput(
     fields.documentNumber = translate('pz.goodsReceipts.errors.documentNumberTooLong', 'Document Number is too long.')
   }
 
-  const documentDate = asTrimmedString(source.documentDate).slice(0, 10)
+  // The whole trimmed value has to be a calendar day: truncating to ten characters would
+  // accept `2026-09-18junk` and a timestamp alike.
+  const documentDate = asTrimmedString(source.documentDate)
   if (!documentDate) {
     fields.documentDate = translate('pz.goodsReceipts.errors.documentDateRequired', 'Document Date is required.')
   } else if (!isCalendarDay(documentDate)) {
@@ -135,7 +141,17 @@ export function parseGoodsReceiptWriteInput(
       )
       continue
     }
-    const unit = asTrimmedString(line.unit).slice(0, UNIT_MAX_LENGTH)
+    const unit = asTrimmedString(line.unit)
+    if (unit.length > UNIT_MAX_LENGTH) {
+      // Silently truncating would store something the user never wrote on a document they
+      // are meant to be able to trust.
+      fields.lines ??= translate(
+        'pz.goodsReceipts.errors.lineUnitTooLong',
+        'Position {position}: the unit is too long.',
+        { position },
+      )
+      continue
+    }
     lines.push({ catalogProductId, quantity, unit: unit || null })
   }
 

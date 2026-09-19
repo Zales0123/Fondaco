@@ -16,6 +16,7 @@ import {
   GOODS_RECEIPTS_CREATE_HREF,
   GOODS_RECEIPTS_ENTITY_ID,
   GOODS_RECEIPTS_TABLE_ID,
+  useCanManageGoodsReceipts,
   useWarehouseNames,
 } from './goodsReceiptsPresentation'
 
@@ -117,17 +118,21 @@ export default function GoodsReceiptsTable() {
   )
 
   const columns = React.useMemo(() => buildColumns(t), [t])
+  const canManage = useCanManageGoodsReceipts()
   const createLabel = t('pz.goodsReceipts.table.actions.create')
+  // Offering a create action to someone the create page will refuse is a dead end, not a
+  // permission check — the route metadata stays the authority either way.
+  const createAction = canManage ? (
+    <Button asChild>
+      <Link href={GOODS_RECEIPTS_CREATE_HREF}>{createLabel}</Link>
+    </Button>
+  ) : null
 
   return (
     <DataTable<GoodsReceiptRow>
       title={t('pz.goodsReceipts.page.title')}
       titleHeadingLevel={1}
-      actions={(
-        <Button asChild>
-          <Link href={GOODS_RECEIPTS_CREATE_HREF}>{createLabel}</Link>
-        </Button>
-      )}
+      actions={createAction}
       columns={columns}
       data={rows}
       entityId={GOODS_RECEIPTS_ENTITY_ID}
@@ -138,11 +143,7 @@ export default function GoodsReceiptsTable() {
         <EmptyState
           title={t('pz.goodsReceipts.table.empty.title')}
           description={t('pz.goodsReceipts.table.empty.description')}
-          actions={(
-            <Button asChild>
-              <Link href={GOODS_RECEIPTS_CREATE_HREF}>{createLabel}</Link>
-            </Button>
-          )}
+          actions={createAction}
         />
       )}
       pagination={{
