@@ -3,6 +3,7 @@
   "warehouseman.actions.scan": "Scan product",
   "warehouseman.actions.stocktake": "Stocktake",
   "warehouseman.actions.transfer": "Transfer",
+  "warehouseman.login.demoTitle": "Demo account for this environment",
   "warehouseman.login.email": "Email",
   "warehouseman.login.failed": "Wrong email or password.",
   "warehouseman.login.password": "Password",

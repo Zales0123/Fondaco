@@ -8,6 +8,7 @@ import { Label } from '@open-mercato/ui/primitives/label'
 import { Alert, AlertDescription } from '@open-mercato/ui/primitives/alert'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import type { DemoCredentials } from '../lib/demoCredentials'
 
 export const PANEL_HOME_PATH = '/warehouseman'
 
@@ -19,7 +20,7 @@ type LoginResponse = { ok?: boolean; error?: string; redirect?: string }
  * there is no capability sniffing or role precedence here. The admin login is
  * untouched and keeps sending office staff to the backend.
  */
-export function PanelLoginForm() {
+export function PanelLoginForm({ demoCredentials }: { demoCredentials?: DemoCredentials | null }) {
   const t = useT()
   const router = useRouter()
   const [email, setEmail] = React.useState('')
@@ -64,6 +65,21 @@ export function PanelLoginForm() {
     <div className="flex min-h-screen flex-col justify-center bg-background px-4 py-8 text-foreground">
       <form onSubmit={onSubmit} className="mx-auto flex w-full max-w-md flex-col gap-4 text-lg">
         <h1 className="text-2xl font-semibold">{t('warehouseman.login.title')}</h1>
+        {demoCredentials ? (
+          <div className="rounded-md border border-border bg-muted p-4">
+            <p className="font-medium">{t('warehouseman.login.demoTitle')}</p>
+            <dl className="mt-2 flex flex-col gap-1">
+              <div className="flex flex-wrap gap-2">
+                <dt className="text-muted-foreground">{t('warehouseman.login.email')}</dt>
+                <dd className="font-mono">{demoCredentials.email}</dd>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <dt className="text-muted-foreground">{t('warehouseman.login.password')}</dt>
+                <dd className="font-mono">{demoCredentials.password}</dd>
+              </div>
+            </dl>
+          </div>
+        ) : null}
         {error ? (
           <Alert variant="destructive">
             <AlertDescription className="text-lg">{error}</AlertDescription>

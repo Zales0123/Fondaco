@@ -56,6 +56,18 @@ if (!localExists || localIsOurs) {
     'APP_ALLOWED_ORIGINS=**.orb.local',
     `DOCUMENTS_COLLAB_ALLOWED_ORIGINS=${appUrl}`,
     '',
+    '# No outbound email provider module is enabled in a dev worktree, so every',
+    '# notification that would be emailed - a role assignment, a user invite - throws',
+    '# EMAIL_TRANSPORT_NOT_CONFIGURED and surfaces as a runtime error in the dev',
+    '# overlay. The operation itself still succeeds and the in-app notification still',
+    '# lands. Drop this line to exercise real email delivery.',
+    'OM_DISABLE_EMAIL_DELIVERY=1',
+    '',
+    '# Print the seeded demo warehouseman on the panel login page. Refused outright',
+    '# when NODE_ENV is production, so this can only ever advertise a throwaway',
+    '# environment. Drop the line to hide the box.',
+    'OM_SHOW_DEMO_CREDENTIALS=1',
+    '',
   ].join('\n'))
 } else {
   console.warn(`${localPath} is hand-edited — left untouched; APP_URL must be ${appUrl}`)
