@@ -17,13 +17,18 @@ import type { Metadata } from 'next'
 import { resolveLocalizedTitleMetadata } from '@/lib/metadata'
 import { resolvePageMiddlewareRedirect } from '@open-mercato/shared/lib/middleware/page-executor'
 import { backendMiddlewareEntries } from '@/.mercato/generated/backend-middleware.generated'
+import { enforceSurfaceHost } from '@/lib/surfaceHostGuard'
+import type { SearchParamsInput } from '@/lib/surfaceHosts'
 
 bootstrap()
 registerBackendRouteManifests(backendRouteFacades)
 
 type Awaitable<T> = T | Promise<T>
 
-type BackendParams = { params: Awaitable<{ slug?: string[] }> }
+type BackendParams = {
+  params: Awaitable<{ slug?: string[] }>
+  searchParams?: Awaitable<SearchParamsInput>
+}
 
 async function renderAccessDenied() {
   const { translate } = await resolveTranslations()
@@ -57,6 +62,13 @@ export async function generateMetadata(props: BackendParams): Promise<Metadata> 
 export default async function BackendCatchAll(props: BackendParams) {
   const params = await props.params
   const pathname = '/backend/' + (params.slug?.join('/') ?? '')
+
+  // The backend is served on APP_URL's host and nowhere else (ADR-0013), so a request that
+  // reached it on the Panel host is sent to the host whose cookie jar owns the backend
+  // session. This runs before the route is matched: a request that is leaving should not
+  // cost a manifest lookup or a session read.
+  await enforceSurfaceHost(pathname, await props.searchParams)
+
   const match = findRouteManifestMatch(getBackendRouteManifests(), pathname)
   if (!match) return notFound()
   let auth: AuthContext = null

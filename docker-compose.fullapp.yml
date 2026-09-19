@@ -58,7 +58,13 @@ services:
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-}
       CONSENT_INTEGRITY_SECRET: ${CONSENT_INTEGRITY_SECRET:-}
       # Set APP_URL to the public application origin in production deployments.
+      # It is also the backend's host: /backend and /login are served there and nowhere
+      # else once WAREHOUSEMAN_PANEL_URL is set.
       APP_URL: ${APP_URL:-http://localhost:3000}
+      # The Warehouseman Panel's own host, which is what gives the Panel and the backend
+      # independent sessions (ADR-0013). Unset serves both on APP_URL, sharing one session.
+      # When set, its origin must also appear in APP_ALLOWED_ORIGINS.
+      WAREHOUSEMAN_PANEL_URL: ${WAREHOUSEMAN_PANEL_URL:-}
       # Optional: unset disables realtime document collaboration (single-user editing keeps working).
       NEXT_PUBLIC_DOCUMENTS_COLLAB_URL: ${NEXT_PUBLIC_DOCUMENTS_COLLAB_URL:-}
       # Required only when collaboration is enabled: a unique high-entropy shared secret

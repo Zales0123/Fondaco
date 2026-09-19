@@ -15,10 +15,15 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { resolveLocalizedTitleMetadata } from '@/lib/metadata'
 import { resolvePageMiddlewareRedirect } from '@open-mercato/shared/lib/middleware/page-executor'
 import { frontendMiddlewareEntries } from '@/.mercato/generated/frontend-middleware.generated'
+import { enforceSurfaceHost } from '@/lib/surfaceHostGuard'
+import type { SearchParamsInput } from '@/lib/surfaceHosts'
 
 registerFrontendRouteManifests(frontendRoutes)
 
-type FrontendParams = { params: Promise<{ slug: string[] }> }
+type FrontendParams = {
+  params: Promise<{ slug: string[] }>
+  searchParams?: Promise<SearchParamsInput>
+}
 
 async function ensureServerBootstrap() {
   const { bootstrap } = await import('@/bootstrap')
@@ -54,9 +59,15 @@ export async function generateMetadata({ params }: FrontendParams): Promise<Meta
   })
 }
 
-export default async function SiteCatchAll({ params }: FrontendParams) {
+export default async function SiteCatchAll({ params, searchParams }: FrontendParams) {
   const p = await params
   const pathname = '/' + (p.slug?.join('/') ?? '')
+
+  // The Panel is served on WAREHOUSEMAN_PANEL_URL's host and nowhere else (ADR-0013),
+  // so that its session cookie cannot land in the backend's jar. Every other frontend
+  // route is untouched: the guard only answers for the two surface namespaces.
+  await enforceSurfaceHost(pathname, await searchParams)
+
   const match = findRouteManifestMatch(getFrontendRouteManifests(), pathname)
   if (!match) return notFound()
 

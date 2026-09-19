@@ -46,9 +46,11 @@ services:
       PORT: 3000
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-open-mercato}
       JWT_SECRET: ${JWT_SECRET:-JWT}
-      # APP_URL, APP_ALLOWED_ORIGINS and NEXT_PUBLIC_DOCUMENTS_COLLAB_URL are
-      # browser-facing, so they come from .env/.env.local (see env_file above).
-      # Set them in .env.local when serving the app over an OrbStack domain.
+      # APP_URL, APP_ALLOWED_ORIGINS, WAREHOUSEMAN_PANEL_URL and
+      # NEXT_PUBLIC_DOCUMENTS_COLLAB_URL are browser-facing, so they come from
+      # .env/.env.local (see env_file above). Set them in .env.local when serving the
+      # app over an OrbStack domain — including WAREHOUSEMAN_PANEL_URL, which needs a
+      # second name resolving to the same container, or unset it to share one session.
       DOCUMENTS_COLLAB_JWT_SECRET_V2: ${DOCUMENTS_COLLAB_JWT_SECRET_V2:-dev-only-documents-collab-v2-secret}
       CACHE_REDIS_URL: redis://redis:6379
       CACHE_STRATEGY: ${CACHE_STRATEGY:-redis}

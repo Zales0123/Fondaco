@@ -94,6 +94,24 @@ Two settings make that work:
 - `APP_URL` is the browser-facing base URL used for links and origin
   allowlists. Set it per worktree in `.env.local`.
 
+### Two hosts for the backend and the Panel
+
+`WAREHOUSEMAN_PANEL_URL` gives the Warehouseman Panel its own host so that it and
+the backend hold independent sessions (ADR-0013). The OrbStack container domain
+gives each project exactly one name, so the dev stack has two honest options:
+
+- **Leave `WAREHOUSEMAN_PANEL_URL` unset.** Both surfaces answer on the OrbStack
+  domain and share one session, which is fine for backend-only work. This is the
+  default for the Docker stack.
+- **Point a second name at the same container.** Add both names to `/etc/hosts`
+  against the container's address, set `APP_URL` and `WAREHOUSEMAN_PANEL_URL` to
+  them in `.env.local`, and list the Panel origin in `APP_ALLOWED_ORIGINS` as
+  well — spelled out in full, because the wildcard entries that cover
+  `**.orb.local` are ignored by the origin check that guards security emails.
+
+A half-configured split does not start: the app refuses to serve either surface
+rather than quietly serving both on one host and one session.
+
 `next.config.ts` resolves `allowedDevOrigins` unconditionally. The dev server is
 started by the Open Mercato CLI with `NODE_ENV=production`
 (`buildServerProcessEnvironment`), so gating the allowlist on `NODE_ENV` left it
