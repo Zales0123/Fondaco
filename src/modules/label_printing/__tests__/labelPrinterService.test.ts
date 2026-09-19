@@ -148,6 +148,34 @@ describe('createLabelPrinterService', () => {
   })
 
   /**
+   * A single wedged `drain()` should not cost the whole job budget. `send()` only
+   * checks the deadline *between* awaits, so an unbounded `transport.write` hands
+   * control to the link and never takes it back — the outer job race is the only
+   * thing left, and every operator click until it fires answers 409. Bounding the
+   * write turns a minutes-long lockout into seconds.
+   */
+  it('fails a stalled write on the write deadline, not the job deadline', async () => {
+    const printer = createFakePrinter()
+    const service = createLabelPrinterService({
+      config: { ...config, jobTimeoutMs: 5_000, writeTimeoutMs: 20 },
+      openTransport: async () => ({
+        write: () => new Promise<void>(() => {}),
+        onData: (listener) => printer.transport.onData(listener),
+        close: () => printer.transport.close(),
+      }),
+    })
+
+    const startedAt = Date.now()
+    await expect(service.printImage(await readFile(assetPath))).rejects.toMatchObject({
+      code: 'printer-timeout',
+    })
+    // The job bound is 250x the write bound; missing it would mean the write ran
+    // unbounded and only the outer race ended the job.
+    expect(Date.now() - startedAt).toBeLessThan(1_000)
+    expect(printer.closed).toBe(true)
+  })
+
+  /**
    * The lock only resets in a `finally`, so a job that never settles holds it for
    * the life of the process — and the runner is process-wide. One wedged label
    * would answer every later print, in every tenant, with 409 until a restart.

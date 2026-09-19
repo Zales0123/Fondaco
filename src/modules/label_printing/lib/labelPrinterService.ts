@@ -10,7 +10,7 @@ import { printRasterizedImage, PrinterError, DEFAULT_JOB_TIMEOUT_MS } from './ni
 import { rasterizeImage, RasterizeError } from './rasterize'
 import { createExclusiveRunner, PrinterBusyError, type ExclusiveRunner } from './printQueue'
 import { openSerialTransport } from './serialTransport'
-import type { SerialTransportFactory } from './types'
+import type { SerialTransport, SerialTransportFactory } from './types'
 
 export class PrinterUnavailableError extends Error {
   readonly code = 'printer-unavailable' as const
@@ -42,6 +42,16 @@ export type LabelPrinterConfig = {
    * exactly the place the write did — and it runs inside the printer lock.
    */
   closeTimeoutMs?: number
+  /**
+   * How long a single `transport.write` may take before the job is abandoned.
+   *
+   * `printRasterizedImage` only checks its deadline *between* awaits, so an
+   * unbounded write hands control to the link and never takes it back. Without
+   * this bound the whole job budget is the only backstop, and the printer lock
+   * — which is process-wide — is held for all of it. One stalled row packet
+   * then answers every later print with 409 for the full `jobTimeoutMs`.
+   */
+  writeTimeoutMs?: number
 }
 
 /**
@@ -59,6 +69,11 @@ export const DEFAULT_OPEN_TIMEOUT_MS = 30_000
  * against every other tenant.
  */
 export const DEFAULT_CLOSE_TIMEOUT_MS = 5_000
+/**
+ * A healthy job flushes every packet in well under a second over RFCOMM; the
+ * whole print is 3-6s. A single write past this is a wedged link, not a slow one.
+ */
+export const DEFAULT_WRITE_TIMEOUT_MS = 5_000
 
 /**
  * Races `work` against a real timer.
@@ -140,6 +155,7 @@ export function createLabelPrinterService(deps: {
       const openTimeoutMs = config.openTimeoutMs ?? DEFAULT_OPEN_TIMEOUT_MS
       const jobTimeoutMs = config.jobTimeoutMs ?? DEFAULT_JOB_TIMEOUT_MS
       const closeTimeoutMs = config.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS
+      const writeTimeoutMs = config.writeTimeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS
 
       return runExclusive(async () => {
         let transport
@@ -159,12 +175,29 @@ export function createLabelPrinterService(deps: {
           )
         }
 
+        // Bounds each flush on its own clock. The job deadline still caps the
+        // whole print; this stops one stalled packet from consuming all of it.
+        const boundedTransport: SerialTransport = {
+          write: (data) =>
+            withDeadline(
+              writeTimeoutMs,
+              () => transport.write(data),
+              () =>
+                new PrinterError(
+                  `A write to the label printer stalled for ${writeTimeoutMs}ms`,
+                  'printer-timeout',
+                ),
+            ),
+          onData: (listener) => transport.onData(listener),
+          close: () => transport.close(),
+        }
+
         try {
           await withDeadline(
             jobTimeoutMs,
             () =>
               printRasterizedImage({
-                transport,
+                transport: boundedTransport,
                 image,
                 density: config.density,
                 labelType: config.labelType,
