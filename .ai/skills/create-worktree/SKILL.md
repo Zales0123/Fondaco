@@ -47,8 +47,17 @@ Compute the slug once, reuse it everywhere. Never guess the path — read it fro
    `yarn install`, `scripts/wt-worktree-env.mjs <project>`, then
    `docker compose -f docker-compose.fullapp.dev.yml -f docker/compose.worktree.yml up -d`.
 
-   First run on a machine builds the `dev` image — minutes. Run it with
-   `run_in_background: true` and poll, rather than blocking on a foreground timeout.
+   **`wt switch` exits 0 as soon as the worktree exists — the post-start hooks
+   keep running detached.** Never read that exit code as "stack is up". Track the
+   real work instead:
+
+   ```bash
+   pgrep -f 'wt hook run-pipeline'                                  # still running?
+   tail -f <repo>/.git/wt/logs/<branch>/project/post-start/deps.log   # yarn install
+   tail -f <repo>/.git/wt/logs/<branch>/project/post-start/stack.log  # image build + up -d
+   ```
+
+   First run on a machine builds the `dev` image — minutes.
 
 3. Confirm the env is pinned (worktree dir):
 
@@ -91,6 +100,21 @@ Compute the slug once, reuse it everywhere. Never guess the path — read it fro
   The `stack` alias pins `COMPOSE_PROJECT_NAME` and both compose files and forwards
   everything after it to `docker compose`. `-y` skips the alias approval prompt,
   which cannot be answered non-interactively.
+
+## Attach to Herdr
+
+Herdr models one worktree as its own workspace — it cannot bind a second checkout
+into the workspace you are sitting in. `--workspace <id>` only names the source
+workspace to inherit the repo from; a new workspace is created either way:
+
+```bash
+herdr worktree open --workspace <current id> --path <worktree path>
+```
+
+Pass `--path` or `--branch`, never both. The reply carries the new
+`workspace_id` and label — report it, and say plainly that a new workspace was
+created rather than the current one re-pointed. `herdr workspace focus <id>`
+switches to it; `herdr workspace list` shows what exists.
 
 ## Optional services
 
