@@ -5,7 +5,12 @@ import { Button } from '@open-mercato/ui/primitives/button'
 import { Input } from '@open-mercato/ui/primitives/input'
 import { Spinner } from '@open-mercato/ui/primitives/spinner'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { adjustScanQuantity, MIN_SCAN_QUANTITY } from '../lib/receivingPanel'
+import {
+  adjustScanQuantity,
+  formatCountQuantity,
+  MIN_SCAN_QUANTITY,
+  type ScanQuantitySuggestion,
+} from '../lib/receivingPanel'
 
 /** The coarse step. A pallet of 48 is five taps, not 47. */
 const COARSE_STEP = 10
@@ -15,6 +20,13 @@ export type ScanQuantityStepProps = {
   productName: string
   /** The code as scanned, so the person can check it against the label in their hand. */
   code: string
+  /**
+   * What the delivery says about this product, frozen at the moment of the scan: the number
+   * the dial opens on, and the figures the line under the code explains it with. Omitted —
+   * the screen could not read the document — the step behaves as it always did and opens on
+   * one, with nothing claimed about the delivery.
+   */
+  suggestion?: ScanQuantitySuggestion | null
   /** A count is posting. Disables everything and spins the confirm button. */
   busy: boolean
   /** Already-localized refusal from a confirm that failed. The step stays open showing it. */
@@ -46,15 +58,17 @@ export type ScanQuantityStepProps = {
 export function ScanQuantityStep({
   productName,
   code,
+  suggestion,
   busy,
   error,
   onConfirm,
   onCancel,
 }: ScanQuantityStepProps) {
   const t = useT()
-  // A scan asserts one of something is there, so that is where the count starts: a single
-  // item is scan then confirm, and nothing has to be typed to record the common case.
-  const [quantity, setQuantity] = React.useState(MIN_SCAN_QUANTITY)
+  // Where the count starts: what the delivery still expects of this product, so the ordinary
+  // pallet — one product, the whole line — is scan then confirm with nothing tapped or typed.
+  // Without a document figure a scan means what it has always meant, one of this is here.
+  const [quantity, setQuantity] = React.useState(suggestion?.quantity ?? MIN_SCAN_QUANTITY)
   const [typing, setTyping] = React.useState<string | null>(null)
   const confirmRef = React.useRef<HTMLButtonElement>(null)
 
@@ -94,6 +108,10 @@ export function ScanQuantityStep({
             running off the side of a phone. */}
         <span className="break-words text-2xl font-bold leading-tight">{productName}</span>
         <span className="break-all font-mono text-base text-muted-foreground">{code}</span>
+        {/* Why the dial says what it says. A proposed number nobody can account for is a
+            number that gets confirmed without being read — and the case this has to catch is
+            the delivery that does not match what is actually on the floor. */}
+        <DeliveryHint suggestion={suggestion ?? null} />
       </div>
 
       {/* A refused count leaves the step up rather than throwing the operator back to the
@@ -190,6 +208,43 @@ export function ScanQuantityStep({
       </Button>
     </div>
   )
+}
+
+/**
+ * The one line that accounts for the proposed number.
+ *
+ * It names the document's own figure rather than the proposal: the proposal is on the dial
+ * already, and what the operator cannot otherwise see is how much of the line somebody has
+ * counted onto another pallet. A product no line of the delivery expected says so plainly —
+ * on a receiving floor that is news, and the panel has no other place to break it.
+ */
+function DeliveryHint({ suggestion }: { suggestion: ScanQuantitySuggestion | null }) {
+  const t = useT()
+  if (!suggestion) return null
+
+  if (suggestion.expected === null) {
+    return <span className="text-base text-muted-foreground">{t('warehouseman.receiving.count.step.unexpected')}</span>
+  }
+
+  const expected = formatCountQuantity(suggestion.expected)
+  const counted = formatCountQuantity(suggestion.counted)
+  // Nothing counted yet is the first pallet of a line, which is most scans: the shorter
+  // sentence is the true one there, and a "0 already counted" clause is noise to read past.
+  if (counted === '0') {
+    return (
+      <span className="text-base text-muted-foreground">
+        {t('warehouseman.receiving.count.step.expected', undefined, { expected })}
+      </span>
+    )
+  }
+
+  // A line already counted in full is the one case where the dial and the document disagree:
+  // it proposes one because it will not propose nothing, so the line has to say why.
+  const key =
+    formatCountQuantity(suggestion.outstanding ?? '0') === '0'
+      ? 'warehouseman.receiving.count.step.expectedComplete'
+      : 'warehouseman.receiving.count.step.expectedRemaining'
+  return <span className="text-base text-muted-foreground">{t(key, undefined, { expected, counted })}</span>
 }
 
 /**

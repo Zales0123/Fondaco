@@ -25,6 +25,7 @@ import {
 } from './PanelUI'
 import { PanelLinkButton, ScreenEmpty, ScreenError, ScreenMessage, ScreenWarning } from './ReceivingStates'
 import { ScanQuantityStep } from './ScanQuantityStep'
+import { useReceivingSummary } from '@/modules/pz/components/ReceivingSummary'
 import {
   closePallet,
   countPalletLine,
@@ -51,7 +52,9 @@ import {
   productLabel,
   receivingReceiptHref,
   resolveCountQuantity,
+  suggestScanQuantity,
   type PalletLabelNotice,
+  type ScanQuantitySuggestion,
 } from '../lib/receivingPanel'
 import { takePalletLabelNotice } from '../lib/palletLabelNotice'
 
@@ -66,7 +69,16 @@ const SCAN_LOG_LIMIT = 10
  * variant rather than the code: the lookup already happened, and re-resolving on confirm
  * would let the answer change between the name the operator read and the line they get.
  */
-type PendingScan = { catalogVariantId: string; name: string | null; code: string }
+type PendingScan = {
+  catalogVariantId: string
+  name: string | null
+  code: string
+  /**
+   * What the delivery said about this product when it was scanned. Frozen with the scan so the
+   * number on the dial cannot move under a thumb that is already reaching for Confirm.
+   */
+  suggestion: ScanQuantitySuggestion | null
+}
 
 export type ReceivingCountProps = { receiptId: string; palletId: string }
 
@@ -136,9 +148,52 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
     queryKey: ['warehouseman.receiving.palletLines', palletId],
     queryFn: () => fetchPalletLines(palletId),
   })
+  /**
+   * Expected against counted for the whole delivery, which is what lets a scan propose the
+   * quantity the document ordered instead of one. It is read once per screen and deliberately
+   * not refreshed between scans — see `suggestFor`, which keeps the figure current from this
+   * pallet's own lines. The comparison screen asks for the same thing under the same query
+   * key, so walking from here to the summary reuses this answer rather than paying for it
+   * twice.
+   *
+   * Counting survives without it: a delivery that will not load leaves every scan proposing
+   * one, which is exactly the behaviour this screen had before.
+   */
+  const delivery = useReceivingSummary(receiptId)
 
   const pallet = pallets.data?.find((candidate) => candidate.id === palletId) ?? null
   const closed = pallet?.status === 'closed'
+
+  /**
+   * What to open the quantity step on for a product that has just been scanned.
+   *
+   * The delivery-wide figures are a snapshot, so this pallet's share of them is replaced by
+   * what the pallet holds right now — `lines` is refetched after every count, which is what
+   * makes a second scan of the same product propose what is *still* missing rather than the
+   * shortfall as it stood when the screen loaded.
+   *
+   * `null` is reserved for a delivery this screen could not read — the step then proposes one
+   * and claims nothing. It is not the same as a delivery that loaded and does not list the
+   * product: that is a surplus, and saying so is the point.
+   */
+  const suggestFor = React.useCallback(
+    (catalogVariantId: string): ScanQuantitySuggestion | null => {
+      if (!delivery.data) return null
+      const expectedRow = delivery.data.items.find((item) => item.catalogVariantId === catalogVariantId) ?? null
+      // No row at all means no line expected it and no pallet holds it: a surplus, like a row
+      // that carries no expectation of its own.
+      if (!expectedRow) return suggestScanQuantity(null)
+      const onThisPalletNow = lines.data?.find((line) => line.catalogVariantId === catalogVariantId)?.quantity ?? '0'
+      return suggestScanQuantity({
+        // A surplus row carries no expectation, which is the same answer as no row at all.
+        expected: expectedRow.expected,
+        countedAcrossDelivery: expectedRow.counted,
+        countedOnThisPalletThen: expectedRow.pallets.find((entry) => entry.palletId === palletId)?.quantity ?? '0',
+        countedOnThisPalletNow: onThisPalletNow,
+      })
+    },
+    [delivery.data, lines.data, palletId],
+  )
 
   const focusBarcode = React.useCallback(() => barcodeRef.current?.focus(), [])
   /**
@@ -278,7 +333,12 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
       if (fromCamera) {
         // Nothing is counted yet. The step owns the rest, and the dialog accepts no further
         // scan while it is up, so this product cannot be overtaken by the next carton.
-        setPendingScan({ catalogVariantId: variant.catalogVariantId, name: variant.name, code })
+        setPendingScan({
+          catalogVariantId: variant.catalogVariantId,
+          name: variant.name,
+          code,
+          suggestion: suggestFor(variant.catalogVariantId),
+        })
         setScanStatus(null)
         return
       }
@@ -714,8 +774,12 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
         interruption={
           pendingScan ? (
             <ScanQuantityStep
+              // Remounted per scan, which is what lets the dial open on the new product's own
+              // proposal rather than keeping the last one's number.
+              key={pendingScan.code}
               productName={productLabel(pendingScan.name, unknownProduct)}
               code={pendingScan.code}
+              suggestion={pendingScan.suggestion}
               busy={submitting}
               error={formError}
               onConfirm={(confirmed) => void onConfirmPendingScan(confirmed)}
