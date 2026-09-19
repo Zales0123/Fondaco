@@ -10,5 +10,7 @@
   "label_printing.print.error.noVariant": "Ten produkt nie ma aktywnego wariantu, dla którego można wydrukować etykietę.",
   "label_printing.print.error.ambiguousVariant": "Ten produkt ma kilka wariantów i żadnego domyślnego, więc etykieta byłaby niejednoznaczna. Najpierw oznacz wariant domyślny.",
   "label_printing.print.error.unsupportedGtin": "Typ identyfikatora tego wariantu nie może zostać wydrukowany jako kod kreskowy.",
-  "label_printing.print.error.render": "Nie udało się wygenerować kodu kreskowego na etykiecie."
+  "label_printing.print.error.render": "Nie udało się wygenerować kodu kreskowego na etykiecie.",
+  "label_printing.print.error.noPallet": "Ta paleta już nie istnieje, więc nie ma czego wydrukować.",
+  "label_printing.print.error.noPalletCode": "Ta paleta nie ma kodu, więc nie ma czego wydrukować."
 }

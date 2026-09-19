@@ -7,7 +7,7 @@ import { Input } from '@open-mercato/ui/primitives/input'
 import { ComboboxInput } from '@open-mercato/ui/backend/inputs/ComboboxInput'
 import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { PanelLinkButton, ScreenEmpty, ScreenError, ScreenMessage } from './ReceivingStates'
+import { PanelLinkButton, ScreenEmpty, ScreenError, ScreenMessage, ScreenWarning } from './ReceivingStates'
 import {
   closePallet,
   countPalletLine,
@@ -15,6 +15,7 @@ import {
   fetchPalletLines,
   fetchPallets,
   fetchReceivingDocument,
+  printPalletLabel,
   reopenPallet,
   resolveVariantByBarcode,
   searchCatalogVariants,
@@ -25,13 +26,16 @@ import {
   type ReceivingDocument,
 } from '../lib/receivingApi'
 import {
+  describePalletPrintOutcome,
   formatCountQuantity,
   normalizeScannedCode,
   parseCountQuantity,
   productLabel,
   receivingReceiptHref,
   receivingSummaryHref,
+  type PalletLabelNotice,
 } from '../lib/receivingPanel'
+import { takePalletLabelNotice } from '../lib/palletLabelNotice'
 
 export type ReceivingCountProps = { receiptId: string; palletId: string }
 
@@ -57,6 +61,18 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
   const [submitting, setSubmitting] = React.useState(false)
   const [editing, setEditing] = React.useState<{ id: string; value: string } | null>(null)
   const [rowError, setRowError] = React.useState<{ id: string; message: string } | null>(null)
+  // The notice carries the pallet it is about: this screen is reused when one pallet is
+  // opened after another, and a label warning must never be read against the wrong pallet.
+  const [labelNotice, setLabelNotice] = React.useState<(PalletLabelNotice & { palletId: string }) | null>(null)
+  const [printing, setPrinting] = React.useState(false)
+
+  // Creating a pallet prints its label and then opens the pallet, so the outcome of that
+  // print is waiting here. Reading it consumes it: coming back to this pallet later must
+  // not resurrect what the printer did half an hour ago.
+  React.useEffect(() => {
+    const carried = takePalletLabelNotice(palletId)
+    if (carried) setLabelNotice({ ...carried, palletId })
+  }, [palletId])
 
   const document = useQuery<ReceivingDocument | null>({
     queryKey: ['warehouseman.receiving.document', receiptId],
@@ -199,6 +215,31 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
     }
   }
 
+  /**
+   * A torn or missing sticker, reprinted. Nothing about the pallet changes, so a printer
+   * that refuses is a warning here too — the count carries on either way.
+   */
+  async function onPrintLabel() {
+    if (printing) return
+    setPrinting(true)
+    setLabelNotice(null)
+    let printFailure: unknown = null
+    try {
+      await printPalletLabel(palletId)
+    } catch (error) {
+      printFailure = error
+    }
+    setLabelNotice({
+      ...describePalletPrintOutcome(printFailure, {
+        success: t('warehouseman.receiving.count.print.success'),
+        failure: (reason) => t('warehouseman.receiving.count.print.failed', undefined, { reason }),
+        unknownReason: t('warehouseman.receiving.print.unknownReason'),
+      }),
+      palletId,
+    })
+    setPrinting(false)
+  }
+
   async function onClose() {
     if (!pallet) return
     const confirmed = await confirm({
@@ -276,6 +317,27 @@ export function ReceivingCount({ receiptId, palletId }: ReceivingCountProps) {
           {t('warehouseman.receiving.count.close')}
         </Button>
       )}
+
+      <Button
+        type="button"
+        size="lg"
+        variant="outline"
+        className="h-16 w-full text-lg"
+        onClick={onPrintLabel}
+        disabled={printing}
+      >
+        {printing
+          ? t('warehouseman.receiving.count.printing')
+          : t('warehouseman.receiving.count.printLabel')}
+      </Button>
+
+      {labelNotice && labelNotice.palletId === palletId ? (
+        labelNotice.kind === 'warning' ? (
+          <ScreenWarning>{labelNotice.message}</ScreenWarning>
+        ) : (
+          <ScreenMessage>{labelNotice.message}</ScreenMessage>
+        )
+      ) : null}
 
       <form className="flex flex-col gap-2" onSubmit={onSubmit}>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end">

@@ -10,5 +10,7 @@
   "label_printing.print.error.noVariant": "This product has no active variant to print a label for.",
   "label_printing.print.error.ambiguousVariant": "This product has several variants and no default one, so the label would be ambiguous. Mark a default variant first.",
   "label_printing.print.error.unsupportedGtin": "This variant's identifier type cannot be printed as a barcode.",
-  "label_printing.print.error.render": "The barcode could not be rendered onto the label."
+  "label_printing.print.error.render": "The barcode could not be rendered onto the label.",
+  "label_printing.print.error.noPallet": "This pallet no longer exists, so there is nothing to print.",
+  "label_printing.print.error.noPalletCode": "This pallet has no code, so there is nothing to print."
 }

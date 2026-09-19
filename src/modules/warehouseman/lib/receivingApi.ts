@@ -140,6 +140,22 @@ export async function findPalletByCode(code: string, goodsReceiptId: string): Pr
   return call.result as PalletCodeMatch
 }
 
+/** The `label_printing` scope that resolves a pallet into the code printed on its sticker. */
+const PALLET_LABEL_SCOPE = 'pz.pallet'
+
+/**
+ * Prints one pallet's label on the NiimBot. The printer is an exclusive resource, so a
+ * concurrent job is refused with 409 and an unreachable one with 503; both arrive here as a
+ * `ReceivingApiError` carrying the server's already-localized text. Every caller treats that
+ * as a warning about the sticker — the pallet it belongs to is already committed.
+ */
+export async function printPalletLabel(palletId: string): Promise<void> {
+  await send<{ ok: true; message: string }>('/api/label_printing/print-label', 'POST', {
+    scope: PALLET_LABEL_SCOPE,
+    id: palletId,
+  })
+}
+
 export async function closePallet(id: string, expectedVersion: string | null): Promise<PalletWriteResult> {
   return send<PalletWriteResult>('/api/pz/pallets/close', 'POST', { id }, expectedVersion)
 }

@@ -50,12 +50,19 @@ export const setup: ModuleSetupConfig = {
     // opens a picker with nothing in it, which is the one recovery path a Warehouseman has
     // when the catalog does not know the code in front of them. Both degrade to an empty list
     // rather than an error, so the failure would be silent.
+    //
+    // `label_printing.print` is what puts a sticker on the physical pallet: creating a pallet
+    // prints its label, and the pallet screen can print it again for a torn one. Without the
+    // grant every print answers 403, so the floor would be told the printer refused when in
+    // fact they were never allowed to ask — and a pallet with no sticker cannot be scanned
+    // back open, which is the whole point of printing it.
     [WAREHOUSEMAN_ROLE]: [
       'warehouseman.panel.access',
       'pz.goodsReceipts.view',
       'pz.receiving.count',
       'wms.view',
       'catalog.products.view',
+      'label_printing.print',
     ],
   },
 
