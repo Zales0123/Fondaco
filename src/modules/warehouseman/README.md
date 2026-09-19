@@ -1,7 +1,7 @@
 # `warehouseman` — warehouseman panel
 
 The panel warehouse staff work in, at `/warehouseman`, separate from the admin
-backend. See `CONTEXT.md` for the vocabulary and `docs/adr/0001`–`0003` for the
+backend. See `CONTEXT.md` for the vocabulary and `docs/adr/0001`–`0003` and `0012` for the
 decisions that shape it.
 
 ## Screens
@@ -23,6 +23,16 @@ place.
 The header names the assigned warehouse and the signed-in person on every screen, and
 carries the sign-out control. A warehouseman with no assigned warehouse is told so and
 is still admitted — assignment is a convenience, authorization is the feature.
+
+## Reaching it from the backend
+
+Office staff reach the panel from **Backend → WMS → Warehouseman panel**, which the
+module injects into the installed WMS sidebar group
+(`widgets/injection/panel-link-menu/widget.ts`). The entry is gated on the same
+`warehouseman.panel.access` the panel routes require, and it opens in a new tab so the
+backend the office is working in is not replaced by a floor screen. The new tab comes
+from the app shell rather than the entry itself — the installed sidebar contracts carry
+no `target`; see `docs/adr/0012` and `src/components/menuItemNewTab.ts`.
 
 ## Access
 
