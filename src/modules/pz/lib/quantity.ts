@@ -34,3 +34,13 @@ export function fromScaledQuantity(value: bigint): string {
 export function quantityToNumber(value: string): number {
   return Number(fromScaledQuantity(toScaledQuantity(value)))
 }
+
+/**
+ * A quantity as a person reads it. Trailing zeros are dropped as text, never by parsing:
+ * `numeric(18,4)` arrives as `12.0000` and "Short 12.0000" reads like a measurement error
+ * rather than a count.
+ */
+export function formatQuantityForDisplay(value: string): string {
+  if (!value.includes('.')) return value
+  return value.replace(/\.?0+$/, '') || '0'
+}

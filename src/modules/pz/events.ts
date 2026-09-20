@@ -19,6 +19,18 @@ const events = [
     entity: 'goods_receipt',
     category: 'lifecycle',
   },
+  {
+    /**
+     * Goods really reached stock. Separate from `confirmed` because confirming only starts
+     * the posting: the two are minutes and a queue apart, and a partly failed run still
+     * moved part of the delivery. It carries the variants this run posted, with the SKU and
+     * name they were counted under, so a subscriber never has to read the pallets back.
+     */
+    id: 'pz.goods_receipt.stock_posted',
+    label: 'Goods Receipt Stock Posted',
+    entity: 'goods_receipt',
+    category: 'lifecycle',
+  },
 ] as const
 
 export const eventsConfig = createModuleEvents({ moduleId: 'pz', events })

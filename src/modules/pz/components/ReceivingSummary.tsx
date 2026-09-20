@@ -18,6 +18,7 @@ import {
 import { StatusBadge, type StatusBadgeVariant } from '@open-mercato/ui/primitives/status-badge'
 import { cn } from '@open-mercato/shared/lib/utils'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatQuantityForDisplay } from '../lib/quantity'
 import type { ReceivingSummary, ReceivingSummaryResponse, ReceivingSummaryRow } from '../lib/receivingSummary'
 
 const SUMMARY_COLUMN_COUNT = 5
@@ -122,10 +123,10 @@ function SummaryRow({
         <StackedCell label={t('pz.receiving.summary.column.product')}>{product}</StackedCell>
         <StackedCell label={t('pz.receiving.summary.column.sku')}>{row.sku ?? '—'}</StackedCell>
         <StackedCell label={t('pz.receiving.summary.column.expected')}>
-          {row.expected === null ? t('pz.receiving.summary.expected.none') : withUnit(formatQuantity(row.expected), row.unit)}
+          {row.expected === null ? t('pz.receiving.summary.expected.none') : withUnit(formatQuantityForDisplay(row.expected), row.unit)}
         </StackedCell>
         <StackedCell label={t('pz.receiving.summary.column.counted')}>
-          {withUnit(formatQuantity(row.counted), row.unit)}
+          {withUnit(formatQuantityForDisplay(row.counted), row.unit)}
         </StackedCell>
         <StackedCell label={t('pz.receiving.summary.column.difference')}>
           <span className="flex w-full flex-wrap items-center gap-2">
@@ -152,7 +153,7 @@ function SummaryRow({
         <TableCell role="cell" colSpan={SUMMARY_COLUMN_COUNT} className="block text-sm text-muted-foreground md:table-cell">
           {row.pallets.length === 0
             ? t('pz.receiving.summary.expected.none')
-            : row.pallets.map((pallet) => `${pallet.code}: ${formatQuantity(pallet.quantity)}`).join(' · ')}
+            : row.pallets.map((pallet) => `${pallet.code}: ${formatQuantityForDisplay(pallet.quantity)}`).join(' · ')}
         </TableCell>
       </TableRow>
     </>
@@ -185,7 +186,7 @@ function DifferenceBadge({ row }: { row: ReceivingSummaryRow }) {
   const kind = differenceKind(row)
   return (
     <StatusBadge variant={DIFFERENCE_VARIANTS[kind]} dot>
-      {t(`pz.receiving.summary.difference.${kind}`, undefined, { count: formatQuantity(absolute(row.difference)) })}
+      {t(`pz.receiving.summary.difference.${kind}`, undefined, { count: formatQuantityForDisplay(absolute(row.difference)) })}
     </StatusBadge>
   )
 }
@@ -202,15 +203,6 @@ function isMatching(row: ReceivingSummaryRow): boolean {
 
 function absolute(value: string): string {
   return value.startsWith('-') ? value.slice(1) : value
-}
-
-/**
- * Trailing zeros are dropped as text, never by parsing: `numeric(18,4)` arrives as
- * `12.0000` and "Short 12.0000" reads like a measurement error rather than a count.
- */
-function formatQuantity(value: string): string {
-  if (!value.includes('.')) return value
-  return value.replace(/\.?0+$/, '') || '0'
 }
 
 function withUnit(quantity: string, unit: string | null): string {
@@ -231,8 +223,8 @@ function formatUnitTotals(
     .map((total) =>
       t('pz.receiving.summary.totals.unit', undefined, {
         unit: total.unit ?? t('pz.receiving.summary.totals.noUnit'),
-        expected: formatQuantity(total.expected),
-        counted: formatQuantity(total.counted),
+        expected: formatQuantityForDisplay(total.expected),
+        counted: formatQuantityForDisplay(total.counted),
       }),
     )
     .join(' · ')
