@@ -6,18 +6,11 @@ import { createLogger } from '@open-mercato/shared/lib/logger'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import type { OpenApiMethodDoc, OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { LABEL_PRINTER_SERVICE } from '../../di'
-import {
-  PrinterUnavailableError,
-  type LabelPrinterService,
-} from '../../lib/labelPrinterService'
-import { PrinterBusyError } from '../../lib/printQueue'
-import { PrinterError } from '../../lib/niimbotPrinter'
-import { RasterizeError } from '../../lib/rasterize'
-import { BarcodeRenderError, renderBarcodeLabel } from '../../lib/barcodeImage'
+import type { LabelPrinterService } from '../../lib/labelPrinterService'
+import { renderBarcodeLabel } from '../../lib/barcodeImage'
 import { readLabelGeometry } from '../../lib/labelGeometry'
 import {
   LABEL_SCOPE_IDS,
-  LabelNotAvailableError,
   resolveLabelSubject,
   type LabelScopeId,
 } from '../../lib/labelScopes'
@@ -37,6 +30,16 @@ const requestSchema = z.object({
  * Messages are translated here rather than in the widget: a DataTable row
  * action is a headless declaration with no React context, so it cannot reach
  * `useT()`. The server owns the wording; the client only displays it.
+ *
+ * Keyed on the error's own `name`/`code` strings, never `instanceof`. The
+ * printer service arrives through the DI container, which loads it from a
+ * different module instance than the one this route imports from, so the two
+ * copies of each error class are not the same object and every `instanceof`
+ * answered `false` — a real `printer-timeout` reached the operator as the
+ * generic 500 "The label could not be printed." instead of the 502 it is.
+ * Each class assigns `this.name` and a literal `code`, and plain strings cross
+ * that boundary intact (and survive minification, which `constructor.name`
+ * would not).
  */
 function describeFailure(error: unknown): {
   status: number
@@ -44,40 +47,48 @@ function describeFailure(error: unknown): {
   key: string
   fallback: string
 } {
-  if (error instanceof LabelNotAvailableError) {
-    // A refusal, not a fault: the record simply has nothing printable.
+  const failure = (error ?? {}) as { name?: unknown; code?: unknown; messageKey?: unknown }
+  const name = typeof failure.name === 'string' ? failure.name : ''
+  const code = typeof failure.code === 'string' ? failure.code : ''
+
+  // A refusal, not a fault: the record simply has nothing printable. The
+  // wording is the scope's own, so it is only recognised with its key.
+  if (name === 'LabelNotAvailableError' && typeof failure.messageKey === 'string') {
     return {
       status: 422,
-      code: error.code,
-      key: error.messageKey,
+      code: code || 'label-not-available',
+      key: failure.messageKey,
       fallback: 'There is no barcode to print for this record.',
     }
   }
-  if (error instanceof PrinterBusyError) {
+  if (name === 'PrinterBusyError') {
     return {
       status: 409,
-      code: error.code,
+      code: code || 'printer-busy',
       key: 'label_printing.print.error.busy',
       fallback: 'The label printer is already printing. Try again in a moment.',
     }
   }
-  if (error instanceof PrinterUnavailableError) {
+  // `printer-unreachable` is raised by the print job itself, once the printer
+  // has failed to answer any setup command. It means the same thing to the
+  // operator as a port that would not open, so it gets the same answer.
+  if (name === 'PrinterUnavailableError' || code === 'printer-unreachable') {
     return {
       status: 503,
-      code: error.code,
+      code: code || 'printer-unavailable',
       key: 'label_printing.print.error.unavailable',
       fallback: 'The label printer is not reachable. Check that it is switched on and paired.',
     }
   }
-  if (error instanceof BarcodeRenderError) {
+  if (name === 'BarcodeRenderError') {
     return {
       status: 500,
-      code: error.code,
+      code: code || 'barcode-render-failed',
       key: 'label_printing.print.error.render',
       fallback: 'The barcode could not be rendered onto the label.',
     }
   }
-  if (error instanceof RasterizeError) {
+  if (name === 'RasterizeError') {
     return {
       status: 500,
       code: 'invalid-label-image',
@@ -85,10 +96,10 @@ function describeFailure(error: unknown): {
       fallback: 'The label image could not be prepared for printing.',
     }
   }
-  if (error instanceof PrinterError) {
+  if (name === 'PrinterError') {
     return {
       status: 502,
-      code: error.code,
+      code: code || 'printer-error',
       key: 'label_printing.print.error.printer',
       fallback: 'The printer reported a problem and did not finish the label.',
     }
@@ -179,7 +190,8 @@ const printLabelDoc: OpenApiMethodDoc = {
     + 'A record with nothing printable — a variant without a barcode, a pallet that does not '
     + "exist in the caller's tenant and organization — is refused with 422 rather than printed "
     + 'blank. The printer is an exclusive resource, so a concurrent request is rejected with 409 '
-    + 'rather than queued.',
+    + 'rather than queued. A printer that is paired but not connected is reported as unreachable '
+    + 'once it fails to answer the setup commands, rather than after the whole job times out.',
   tags: [labelPrintingTag],
   responses: [
     {
@@ -194,7 +206,7 @@ const printLabelDoc: OpenApiMethodDoc = {
     { status: 409, description: 'The printer is already printing', schema: errorSchema },
     { status: 422, description: 'The record has no printable barcode', schema: errorSchema },
     { status: 502, description: 'The printer reported an error or never finished', schema: errorSchema },
-    { status: 503, description: 'No printer configured or the serial port could not be opened', schema: errorSchema },
+    { status: 503, description: 'No printer configured, the serial port could not be opened, or the printer never answered', schema: errorSchema },
     { status: 500, description: 'Unexpected server error', schema: errorSchema },
   ],
 }

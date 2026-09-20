@@ -31,8 +31,15 @@ export const DEFAULT_JOB_TIMEOUT_MS = 60_000
 /** A blank run length is a single byte in the 0x84 payload. */
 const MAX_BLANK_RUN = 0xff
 
+/**
+ * Commands sent and acknowledged before any row data: density, label type,
+ * print start, page start, page size. They are what the reachability probe
+ * below gives the printer a chance to answer.
+ */
+const SETUP_COMMANDS = 5
+
 export class PrinterError extends Error {
-  readonly code: 'printer-error' | 'printer-timeout'
+  readonly code: 'printer-error' | 'printer-timeout' | 'printer-unreachable'
   constructor(message: string, code: PrinterError['code'] = 'printer-error') {
     super(message)
     this.name = 'PrinterError'
@@ -62,15 +69,21 @@ function createPacketReader(transport: SerialTransport) {
   const parser = createNiimbotParser()
   const queue: NiimbotPacket[] = []
   let notify: (() => void) | null = null
+  let seen = 0
 
   transport.onData((chunk) => {
     const packets = parser.push(chunk)
     if (!packets.length) return
+    seen += packets.length
     queue.push(...packets)
     notify?.()
   })
 
   return {
+    /** Total packets the printer has sent, whether or not anyone awaited them. */
+    get packetsSeen(): number {
+      return seen
+    },
     /** Resolves with the next packet, or null once `timeoutMs` elapses. */
     async read(timeoutMs: number): Promise<NiimbotPacket | null> {
       if (queue.length) return queue.shift()!
@@ -136,6 +149,30 @@ export async function printRasterizedImage(options: PrintOptions): Promise<void>
   pageSize.writeUInt16BE(image.width, 2)
   pageSize.writeUInt16BE(1, 4)
   await sendAndAck(NiimbotCommand.SetPageSize, pageSize)
+
+  // Everything above is a command the printer acknowledges, and nothing below
+  // is answered until the page ends — so this is the last moment the link can
+  // be shown to be alive cheaply.
+  //
+  // It has to be checked, because a write proves nothing here. A B1 that is
+  // paired but disconnected still has its `/dev/cu.*` node: the port opens in
+  // milliseconds, every write and drain reports success, and the bytes go
+  // nowhere. Measured on a disconnected B1, a whole job — 225 writes — was
+  // accepted without a single byte coming back, and the only thing that ended
+  // it was the 60s job deadline, reported as a print that failed rather than a
+  // printer that was never there.
+  //
+  // A printer that is actually listening has answered at least one of these
+  // SETUP_COMMANDS by now; the reads above already gave it `responseTimeoutMs`
+  // each. Nothing is asserted about *which* packets arrived, so a firmware that
+  // acknowledges a different subset still prints.
+  if (reader.packetsSeen === 0) {
+    throw new PrinterError(
+      `The printer did not answer any of the ${SETUP_COMMANDS} setup commands; `
+      + 'it is powered off, out of range or no longer connected',
+      'printer-unreachable',
+    )
+  }
 
   // Row packets are fired without awaiting a reply, exactly as the reference
   // does; the printer answers once at the end of the page.
